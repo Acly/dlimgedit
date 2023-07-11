@@ -1,33 +1,17 @@
+#include "test_utils.hpp"
 #include <dlimgedit/dlimgedit.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/reporters/catch_reporter_event_listener.hpp>
 #include <catch2/reporters/catch_reporter_registrars.hpp>
 
-#include <filesystem>
-
 namespace dlimgedit {
-using Path = std::filesystem::path;
-
-Path const &test_dir() {
-    static Path const path = []() {
-        Path cur = std::filesystem::current_path();
-        while (!exists(cur / "README.md")) {
-            cur = cur.parent_path();
-            if (cur.empty()) {
-                throw std::runtime_error("root directory not found");
-            }
-        }
-        return cur / "test";
-    }();
-    return path;
-}
 
 class ResultCleanup : public Catch::EventListenerBase {
   public:
     using Catch::EventListenerBase::EventListenerBase;
 
-    void testRunStarting(Catch::TestRunInfo const &) override {
+    void testRunStarting(Catch::TestRunInfo const&) override {
         auto results_dir = test_dir() / "result";
         if (exists(results_dir)) {
             remove_all(results_dir);
