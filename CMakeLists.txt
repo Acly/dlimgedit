@@ -39,17 +39,27 @@ target_include_directories(stb PUBLIC ${stb_SOURCE_DIR})
 
 add_library(dlimgedit)
 target_sources(dlimgedit PRIVATE
+  src/environment.cpp
   src/image.cpp
   src/onnx.cpp
   src/segmentation.cpp
 )
 target_include_directories(dlimgedit PUBLIC include PRIVATE src)
 target_link_libraries(dlimgedit PRIVATE onnxruntime stb)
+if (MSVC)
+  target_compile_options(dlimgedit PRIVATE /W4 /WX)
+  add_custom_command(TARGET dlimgedit POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      $<TARGET_FILE:onnxruntime>
+      $<TARGET_FILE_DIR:dlimgedit>)
+endif()
 
 add_executable(test_dlimgedit)
 target_sources(test_dlimgedit PRIVATE
   test/test_image.cpp
   test/test_segmentation.cpp
+  test/test_utils.cpp
 )
-target_link_libraries(test_dlimgedit PRIVATE dlimgedit Catch2::Catch2WithMain)
+target_include_directories(test_dlimgedit PRIVATE src test)
+target_link_libraries(test_dlimgedit PRIVATE dlimgedit onnxruntime Catch2::Catch2WithMain)
 add_test(NAME test_dlimgedit COMMAND test_dlimgedit)
