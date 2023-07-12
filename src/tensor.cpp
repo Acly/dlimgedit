@@ -1,4 +1,4 @@
-#include "onnx.hpp"
+#include "tensor.hpp"
 
 namespace dlimgedit {
 

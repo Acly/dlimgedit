@@ -2,7 +2,7 @@
 
 #include "environment.hpp"
 #include "image.hpp"
-#include "onnx.hpp"
+#include "tensor.hpp"
 #include <dlimgedit/dlimgedit.hpp>
 
 #include <optional>
@@ -11,11 +11,11 @@ namespace dlimgedit {
 
 class SegmentationModel {
   public:
-    Ort::Session image_embedder;
+    Session image_embedder;
     Shape image_shape;
     Shape image_embedding_shape;
 
-    Ort::Session mask_decoder;
+    Session mask_decoder;
     Tensor<float, 4> input_mask;    // always zero
     TensorArray<float, 1> has_mask; // always zero
 

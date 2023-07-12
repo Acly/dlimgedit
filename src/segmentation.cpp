@@ -1,21 +1,10 @@
 #include "segmentation.hpp"
 #include "assert.hpp"
 #include "image.hpp"
-#include "onnx.hpp"
+#include "tensor.hpp"
 
 namespace dlimgedit {
 namespace {
-
-Ort::Session create_session(EnvironmentImpl& env, Path const& model) {
-    Ort::SessionOptions opts;
-    opts.SetIntraOpNumThreads(env.thread_count);
-    opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-    if (env.device == Device::GPU) {
-        opts.AppendExecutionProvider_CUDA({});
-    }
-    Path model_path = env.model_path / model;
-    return Ort::Session(env.onnx_env, model_path.c_str(), opts);
-}
 
 const auto image_embedder_input_names = std::array{"input"};
 const auto image_embedder_output_names = std::array{"output"};
@@ -28,20 +17,16 @@ const auto mask_decoder_output_names = std::array{"masks", "iou_predictions", "l
 } // namespace
 
 SegmentationModel::SegmentationModel(EnvironmentImpl& env)
-    : image_embedder(create_session(env, "mobile_sam_preprocess.onnx")),
-      mask_decoder(create_session(env, "mobile_sam.onnx")) {
-    ASSERT(image_embedder.GetInputCount() == 1);
-    ASSERT(image_embedder.GetOutputCount() == 1);
-    ASSERT(mask_decoder.GetInputCount() == 6);
-    ASSERT(mask_decoder.GetOutputCount() == 3);
+    : image_embedder(env, "mobile_sam_preprocess.onnx", image_embedder_input_names,
+                     image_embedder_output_names),
+      mask_decoder(env, "mobile_sam.onnx", mask_decoder_input_names, mask_decoder_output_names) {
 
-    image_shape = image_embedder.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape();
+    image_shape = image_embedder.input_shape(0);
     ASSERT(image_shape.rank() == 4);
     ASSERT(image_shape[0] == 1);
     ASSERT(image_shape[1] == 3);
 
-    image_embedding_shape =
-        image_embedder.GetOutputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape();
+    image_embedding_shape = image_embedder.output_shape(0);
     ASSERT(image_embedding_shape.rank() == 4);
 
     input_mask = Tensor<float, 4>(Shape{1, 1, 256, 256});
@@ -88,12 +73,11 @@ Segmentation Segmentation::process(ImageView const& input_image, Environment& en
     m->original_extent = input_image.extent;
     m->scaled_extent = input_image.extent;
     m->image_embedding.resize(model.image_embedding_shape);
-    auto input_tensor = create_input(env.impl(), image_tensor);
-    auto output_tensor = create_output(env.impl(), m->image_embedding);
 
-    model.image_embedder.Run(Ort::RunOptions{nullptr}, image_embedder_input_names.data(),
-                             &input_tensor, 1, image_embedder_output_names.data(), &output_tensor,
-                             1);
+    auto input = std::array{create_input(env.impl(), image_tensor)};
+    auto output = std::array{create_output(env.impl(), m->image_embedding)};
+    model.image_embedder.run(input, output);
+
     return Segmentation(std::move(m));
 }
 
@@ -120,13 +104,8 @@ Image Segmentation::Impl::get_mask(std::optional<Point> point, std::optional<Reg
         labels(0, 0) = 2;
         labels(0, 1) = 3;
     }
-    const auto inputs =
-        std::array{create_input(env, image_embedding), create_input(env, points),
-                   create_input(env, labels),          create_input(env, model.input_mask),
-                   create_input(env, model.has_mask),  create_input(env, image_size)};
-    const auto output =
-        model.mask_decoder.Run(Ort::RunOptions{nullptr}, mask_decoder_input_names.data(),
-                               inputs.data(), inputs.size(), mask_decoder_output_names.data(), 3);
+    auto output = model.mask_decoder(image_embedding, points, labels, model.input_mask,
+                                     model.has_mask, image_size);
 
     return create_mask_image(as_tensor<float const, 4>(output[0]), scaled_extent);
 }

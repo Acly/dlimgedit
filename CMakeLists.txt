@@ -16,7 +16,7 @@ add_library(dlimgedit)
 target_sources(dlimgedit PRIVATE
   src/environment.cpp
   src/image.cpp
-  src/onnx.cpp
+  src/tensor.cpp
   src/segmentation.cpp
 )
 target_include_directories(dlimgedit PUBLIC include PRIVATE src)
