@@ -2,6 +2,7 @@
 
 #include "environment.hpp"
 #include "image.hpp"
+#include "onnx.hpp"
 #include <dlimgedit/dlimgedit.hpp>
 
 #include <optional>
@@ -10,15 +11,13 @@ namespace dlimgedit {
 
 class SegmentationModel {
   public:
-    Ort::Session pre_session;
-    std::vector<int64_t> pre_input_shape;
-    std::vector<int64_t> pre_output_shape;
+    Ort::Session image_embedder;
+    Shape image_shape;
+    Shape image_embedding_shape;
 
-    Ort::Session sam_session;
-
-    Extent input_extent() const;
-    int64_t input_size() const;
-    int64_t processed_size() const;
+    Ort::Session mask_decoder;
+    Tensor<float, 4> input_mask;    // always zero
+    TensorArray<float, 1> has_mask; // always zero
 
     explicit SegmentationModel(EnvironmentImpl&);
 };
@@ -29,13 +28,13 @@ struct Segmentation::Impl {
 
     Extent original_extent;
     Extent scaled_extent;
-    std::vector<float> processed_image;
+    Tensor<float, 4> image_embedding;
 
     explicit Impl(EnvironmentImpl& env, SegmentationModel& model);
     Image get_mask(std::optional<Point>, std::optional<Region>) const;
 };
 
-std::vector<uint8_t> create_image_tensor(ImageView const&, std::span<int64_t> const& shape);
-Image create_mask_image(ImageAccess<const float> const& tensor, Extent const& extent);
+Tensor<uint8_t, 4> create_image_tensor(ImageView const&, Shape const&);
+Image create_mask_image(TensorMap<float const, 4> const&, Extent const&);
 
 } // namespace dlimgedit

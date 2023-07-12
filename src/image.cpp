@@ -25,12 +25,18 @@ Image Image::load(std::string_view filepath) {
     return Image(Extent{width, height}, Channels::rgba, std::unique_ptr<uint8_t[]>(pixels));
 }
 
-void Image::save(ImageView const &img, std::string_view filepath) {
+void Image::save(ImageView const& img, std::string_view filepath) {
     int comp = static_cast<int>(img.channels);
     if (!stbi_write_png(filepath.data(), img.extent.width, img.extent.height, comp, img.pixels,
                         img.extent.width * comp)) {
         throw Exception(std::format("Failed to save image {}", filepath));
     }
 }
+
+ImageView::ImageView(Extent e, uint8_t const* pixels, Channels c)
+    : extent(e), stride(e.width), channels(c), pixels(pixels) {}
+ImageView::ImageView(Extent e, std::span<uint8_t const> pixels, Channels c)
+    : ImageView(e, pixels.data(), c) {}
+ImageView::ImageView(Image const& img) : ImageView(img.extent(), img.pixels(), img.channels()) {}
 
 } // namespace dlimgedit
