@@ -74,4 +74,30 @@ TEST_CASE("Segmentation from point", "[segmentation]") {
     Image::save(mask, (test_dir() / "result" / "test_segmentation_from_point.png").string());
 }
 
+TEST_CASE("Segmentation from box", "[segmentation]") {
+    auto env = default_env();
+    auto img = Image::load((test_dir() / "input" / "cat_and_hat.png").string());
+    auto seg = Segmentation::process(img, env);
+    auto mask = seg.get_mask(Region{Point{180, 110}, Extent{325, 220}});
+    CHECK(mask.extent().width == 512);
+    CHECK(mask.extent().height == 512);
+    CHECK(mask.channels() == Channels::mask);
+    Image::save(mask, (test_dir() / "result" / "test_segmentation_from_box.png").string());
+}
+
+TEST_CASE("Segmentation on GPU", "[segmentation]") {
+    auto model_path = model_dir().string();
+    auto opts = Options{};
+    opts.device = Device::gpu;
+    opts.model_path = model_path;
+    auto env = Environment(opts);
+    auto img = Image::load((test_dir() / "input" / "cat_and_hat.png").string());
+    auto seg = Segmentation::process(img, env);
+    auto mask = seg.get_mask(Point{320, 210});
+    CHECK(mask.extent().width == 512);
+    CHECK(mask.extent().height == 512);
+    CHECK(mask.channels() == Channels::mask);
+    Image::save(mask, (test_dir() / "result" / "test_segmentation_on_gpu.png").string());
+}
+
 } // namespace dlimgedit

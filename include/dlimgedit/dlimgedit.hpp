@@ -40,10 +40,10 @@ struct ImageView {
     ImageView(Image const&);
 };
 
-enum class Device { CPU, GPU };
+enum class Device { cpu, gpu };
 
 struct Options {
-    Device device = Device::CPU;
+    Device device = Device::cpu;
     std::string_view model_path = "models";
 };
 

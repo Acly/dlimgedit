@@ -14,7 +14,7 @@ class SegmentationModel;
 
 class EnvironmentImpl {
   public:
-    Device device = Device::CPU;
+    Device device = Device::cpu;
     Path model_path;
     int thread_count = 1;
     Ort::Env onnx_env;
@@ -32,7 +32,8 @@ class EnvironmentImpl {
     std::unique_ptr<SegmentationModel> segmentation_;
 };
 
-template <typename Tensor> Ort::Value create_input(EnvironmentImpl const& env, Tensor const& tensor) {
+template <typename Tensor>
+Ort::Value create_input(EnvironmentImpl const& env, Tensor const& tensor) {
     // Ort::Value doesn't support const even for input tensors
     using T = typename Tensor::Scalar;
     T* mut = const_cast<T*>(tensor.data());

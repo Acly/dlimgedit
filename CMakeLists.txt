@@ -25,9 +25,9 @@ if (MSVC)
   target_compile_options(dlimgedit PRIVATE /W4 /WX)
   target_compile_options(dlimgedit PRIVATE /wd4127 /wd5054) # for Eigen
   add_custom_command(TARGET dlimgedit POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-      $<TARGET_FILE:onnxruntime>
-      $<TARGET_FILE_DIR:dlimgedit>)
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:onnxruntime> $<TARGET_FILE_DIR:dlimgedit>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE_DIR:onnxruntime>/onnxruntime_providers_shared.dll $<TARGET_FILE_DIR:dlimgedit>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE_DIR:onnxruntime>/onnxruntime_providers_cuda.dll $<TARGET_FILE_DIR:dlimgedit>)
 endif()
 
 add_executable(test_dlimgedit)

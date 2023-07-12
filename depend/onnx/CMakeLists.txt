@@ -2,7 +2,7 @@ include(FetchContent)
 
 FetchContent_Declare(
   onnxruntime
-  URL https://github.com/microsoft/onnxruntime/releases/download/v1.15.1/onnxruntime-win-x64-1.15.1.zip
+  URL https://github.com/microsoft/onnxruntime/releases/download/v1.15.1/onnxruntime-win-x64-gpu-1.15.1.zip
   DOWNLOAD_EXTRACT_TIMESTAMP true
 )
 FetchContent_MakeAvailable(onnxruntime)

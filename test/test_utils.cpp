@@ -29,7 +29,7 @@ Path const& test_dir() {
 Environment default_env() {
     auto model_path = model_dir().string();
     Options opts;
-    opts.device = Device::CPU;
+    opts.device = Device::cpu;
     opts.model_path = model_path;
     return Environment(opts);
 }
