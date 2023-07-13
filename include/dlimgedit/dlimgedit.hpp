@@ -119,4 +119,7 @@ class Image {
     std::unique_ptr<uint8_t[]> pixels_;
 };
 
+constexpr bool operator==(Extent a, Extent b) { return a.width == b.width && a.height == b.height; }
+constexpr bool operator!=(Extent a, Extent b) { return !(a == b); }
+
 } // namespace dlimgedit

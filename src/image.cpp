@@ -17,12 +17,17 @@ Image Image::load(std::string_view filepath) {
     int width = 0;
     int height = 0;
     int channels = 0;
-    auto const pixels = stbi_load(filepath.data(), &width, &height, &channels, 4);
+    auto const pixels = stbi_load(filepath.data(), &width, &height, &channels, 0);
     if (!pixels) {
         throw Exception(
             std::format("Failed to load image {}: {}", filepath, stbi_failure_reason()));
     }
-    return Image(Extent{width, height}, Channels::rgba, std::unique_ptr<uint8_t[]>(pixels));
+    if (channels != 1 && channels != 3 && channels != 4) {
+        throw Exception(
+            std::format("Unsupported number of channels ({}) in {}", channels, filepath));
+    }
+    return Image(Extent{width, height}, static_cast<Channels>(channels),
+                 std::unique_ptr<uint8_t[]>(pixels));
 }
 
 void Image::save(ImageView const& img, std::string_view filepath) {

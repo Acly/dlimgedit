@@ -63,26 +63,19 @@ TEST_CASE("Tensor to mask", "[segmentation]") {
     CHECK(result(1, 3, 0) == 0);
 }
 
-TEST_CASE("Segmentation from point", "[segmentation]") {
+TEST_CASE("Segmentation", "[segmentation]") {
     auto env = default_env();
     auto img = Image::load((test_dir() / "input" / "cat_and_hat.png").string());
     auto seg = Segmentation::process(img, env);
-    auto mask = seg.get_mask(Point{320, 210});
-    CHECK(mask.extent().width == 512);
-    CHECK(mask.extent().height == 512);
-    CHECK(mask.channels() == Channels::mask);
-    Image::save(mask, (test_dir() / "result" / "test_segmentation_from_point.png").string());
-}
 
-TEST_CASE("Segmentation from box", "[segmentation]") {
-    auto env = default_env();
-    auto img = Image::load((test_dir() / "input" / "cat_and_hat.png").string());
-    auto seg = Segmentation::process(img, env);
-    auto mask = seg.get_mask(Region{Point{180, 110}, Extent{325, 220}});
-    CHECK(mask.extent().width == 512);
-    CHECK(mask.extent().height == 512);
-    CHECK(mask.channels() == Channels::mask);
-    Image::save(mask, (test_dir() / "result" / "test_segmentation_from_box.png").string());
+    SECTION("point") {
+        auto mask = seg.get_mask(Point{320, 210});
+        check_image_matches(mask, "test_segmentation_point.png");
+    }
+    SECTION("region") {
+        auto mask = seg.get_mask(Region{Point{180, 110}, Extent{325, 220}});
+        check_image_matches(mask, "test_segmentation_region.png");
+    }
 }
 
 TEST_CASE("Segmentation on GPU", "[segmentation]") {
@@ -94,10 +87,7 @@ TEST_CASE("Segmentation on GPU", "[segmentation]") {
     auto img = Image::load((test_dir() / "input" / "cat_and_hat.png").string());
     auto seg = Segmentation::process(img, env);
     auto mask = seg.get_mask(Point{320, 210});
-    CHECK(mask.extent().width == 512);
-    CHECK(mask.extent().height == 512);
-    CHECK(mask.channels() == Channels::mask);
-    Image::save(mask, (test_dir() / "result" / "test_segmentation_on_gpu.png").string());
+    check_image_matches(mask, "test_segmentation_gpu.png");
 }
 
 } // namespace dlimgedit
