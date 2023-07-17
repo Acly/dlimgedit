@@ -4,12 +4,13 @@
 
 #include <cstdio>
 #include <format>
+#include <string_view>
 
 namespace dlimgedit {
 
 class AssertionFailure : public Exception {
   public:
-    AssertionFailure(std::string_view msg) : Exception(msg) {}
+    AssertionFailure(std::string_view msg) : Exception(msg.data()) {}
 };
 
 inline void assertion_failure(char const* file, int line, char const* expr) {

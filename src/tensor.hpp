@@ -6,12 +6,12 @@
 #include <Eigen/Dense>
 #include <onnxruntime_cxx_api.h>
 #ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable : 4554)
+#    pragma warning(push)
+#    pragma warning(disable : 4554)
 #endif
 #include <unsupported/Eigen/CXX11/Tensor>
 #ifdef _MSC_VER
-#pragma warning(pop)
+#    pragma warning(pop)
 #endif
 
 #include <array>

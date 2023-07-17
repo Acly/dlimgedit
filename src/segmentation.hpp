@@ -5,8 +5,6 @@
 #include "tensor.hpp"
 #include <dlimgedit/dlimgedit.hpp>
 
-#include <optional>
-
 namespace dlimgedit {
 
 class SegmentationModel {
@@ -22,19 +20,24 @@ class SegmentationModel {
     explicit SegmentationModel(EnvironmentImpl&);
 };
 
-struct Segmentation::Impl {
-    EnvironmentImpl& env;
-    SegmentationModel& model;
+class SegmentationImpl {
+  public:
+    SegmentationImpl(EnvironmentImpl& env);
+    void process(ImageView const&);
+    void get_mask(Point const*, Region const*, uint8_t* out_mask) const;
 
-    Extent original_extent;
-    Extent scaled_extent;
-    Tensor<float, 4> image_embedding;
+    Extent extent() const { return original_extent_; }
 
-    explicit Impl(EnvironmentImpl& env, SegmentationModel& model);
-    Image get_mask(std::optional<Point>, std::optional<Region>) const;
+  private:
+    EnvironmentImpl& env_;
+    SegmentationModel& model_;
+
+    Extent original_extent_;
+    Extent scaled_extent_;
+    Tensor<float, 4> image_embedding_;
 };
 
 Tensor<uint8_t, 4> create_image_tensor(ImageView const&, Shape const&);
-Image create_mask_image(TensorMap<float const, 4> const&, Extent const&);
+void write_mask_image(TensorMap<float const, 4> const&, Extent const&, uint8_t* out_mask);
 
 } // namespace dlimgedit

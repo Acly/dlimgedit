@@ -11,7 +11,7 @@ namespace dlimgedit {
 TEST_CASE("Image preparation", "[segmentation]") {
     auto shape = Shape{1, 3, 8, 10};
     auto img = Image(Extent{8, 6}, Channels::rgba);
-    std::iota(img.pixels().begin(), img.pixels().end(), 0);
+    std::iota(img.pixels(), img.pixels() + img.size(), 0);
     auto tensor = create_image_tensor(img, shape);
     CHECK(tensor.dimensions()[0] == 1);
     CHECK(tensor.dimensions()[1] == 3);
@@ -51,7 +51,8 @@ TEST_CASE("Image preparation", "[segmentation]") {
 TEST_CASE("Tensor to mask", "[segmentation]") {
     auto tensor_values = std::array{0.0f, 0.0f, 0.2f, -3.1f, 0.0f, 5.5f, 0.0f, 0.7f, 0.0f, 0.9f};
     auto tensor = TensorMap<float const, 4>(tensor_values.data(), Shape(1, 1, 2, 5));
-    auto mask = create_mask_image(tensor, Extent{4, 2});
+    auto mask = Image(Extent{4, 2}, Channels::mask);
+    write_mask_image(tensor, Extent{4, 2}, mask.pixels());
     auto result = as_tensor(mask);
     CHECK(result(0, 0, 0) == 0);
     CHECK(result(0, 1, 0) == 0);
@@ -65,7 +66,7 @@ TEST_CASE("Tensor to mask", "[segmentation]") {
 
 TEST_CASE("Segmentation", "[segmentation]") {
     auto env = default_env();
-    auto img = Image::load((test_dir() / "input" / "cat_and_hat.png").string());
+    auto img = Image::load(test_dir() / "input" / "cat_and_hat.png");
     auto seg = Segmentation::process(img, env);
 
     SECTION("point") {
@@ -82,9 +83,9 @@ TEST_CASE("Segmentation on GPU", "[segmentation]") {
     auto model_path = model_dir().string();
     auto opts = Options{};
     opts.device = Device::gpu;
-    opts.model_path = model_path;
+    opts.model_path = model_path.c_str();
     auto env = Environment(opts);
-    auto img = Image::load((test_dir() / "input" / "cat_and_hat.png").string());
+    auto img = Image::load(test_dir() / "input" / "cat_and_hat.png");
     auto seg = Segmentation::process(img, env);
     auto mask = seg.get_mask(Point{320, 210});
     check_image_matches(mask, "test_segmentation_gpu.png");

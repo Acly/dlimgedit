@@ -35,7 +35,7 @@ Environment default_env() {
     auto model_path = model_dir().string();
     Options opts;
     opts.device = Device::cpu;
-    opts.model_path = model_path;
+    opts.model_path = model_path.c_str();
     return Environment(opts);
 }
 
@@ -51,10 +51,10 @@ float rmse(ImageView const& image_a, ImageView const& image_b) {
 
 void check_image_matches(ImageView const& image, std::string_view reference, float threshold) {
     auto img_path = test_dir() / "result" / reference;
-    Image::save(image, img_path.string());
+    Image::save(image, img_path);
 
     auto ref_path = test_dir() / "reference" / reference;
-    auto ref_image = Image::load(ref_path.string());
+    auto ref_image = Image::load(ref_path);
     auto error = rmse(image, ref_image);
     INFO("Comparing " << img_path << " to " << ref_path << ": RMSE=" << error);
     CHECK(error < threshold);

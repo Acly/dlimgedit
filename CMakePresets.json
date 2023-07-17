@@ -1,23 +1,26 @@
 {
-    "version": 6,
-    "cmakeMinimumRequired": {
-      "major": 3,
-      "minor": 23,
-      "patch": 0
-    },
-    "configurePresets": [
-      {
-        "name": "default",
-        "displayName": "Default Config",
-        "description": "Default build using Ninja generator",
-        "generator": "Ninja",
-        "binaryDir": "${sourceDir}/build"
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 23,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Default Config",
+      "description": "Default build using Ninja generator",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/install"
       }
-    ],
-    "buildPresets": [
-      {
-        "name": "default",
-        "configurePreset": "default"
-      }
-    ]
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default"
+    }
+  ]
 }

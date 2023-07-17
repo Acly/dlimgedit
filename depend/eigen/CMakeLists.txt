@@ -6,7 +6,10 @@ FetchContent_Declare(
   GIT_TAG        3.4.0
   GIT_SHALLOW    true
 )
-set(EIGEN_BUILD_DOC OFF)
-set(EIGEN_BUILD_PKGCONFIG OFF)
-set(BUILD_TESTING OFF)
-FetchContent_MakeAvailable(Eigen)
+FetchContent_GetProperties(Eigen)
+if(NOT depname_POPULATED)
+  FetchContent_Populate(Eigen)
+  add_library(eigen INTERFACE)
+  add_library(Eigen3::Eigen ALIAS eigen)
+  target_include_directories(eigen INTERFACE ${eigen_SOURCE_DIR})
+endif()

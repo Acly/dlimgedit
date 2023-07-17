@@ -20,7 +20,9 @@ Ort::Env init_onnx() {
     if (OrtGetApiBase()->GetApi(ORT_API_VERSION) == nullptr) {
         throw Exception("Could not load onnxruntime library, version mismatch");
     }
-    return Ort::Env(OrtLoggingLevel::ORT_LOGGING_LEVEL_WARNING, "dlimgedit");
+    auto env = Ort::Env(OrtLoggingLevel::ORT_LOGGING_LEVEL_WARNING, "dlimgedit");
+    env.DisableTelemetryEvents();
+    return env;
 }
 
 EnvironmentImpl::EnvironmentImpl(Options const& opts)
@@ -81,10 +83,6 @@ std::vector<Ort::Value> Session::run(std::span<Ort::Value const> inputs) {
     return session_.Run(opts, input_names_.data(), inputs.data(), inputs.size(),
                         output_names_.data(), output_names_.size());
 }
-
-Environment::Environment(Options const& opts) : m_(std::make_unique<EnvironmentImpl>(opts)) {}
-Environment::~Environment() = default;
-EnvironmentImpl& Environment::impl() { return *m_; }
 
 EnvironmentImpl::~EnvironmentImpl() = default;
 

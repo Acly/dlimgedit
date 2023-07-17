@@ -54,41 +54,39 @@ Tensor<uint8_t, 4> create_image_tensor(ImageView const& image, Shape const& shap
     return tensor;
 }
 
-Image create_mask_image(TensorMap<float const, 4> const& tensor, Extent const& extent) {
-    auto mask_image = Image(extent, Channels::mask);
-    auto mask = as_tensor(mask_image);
+void write_mask_image(TensorMap<float const, 4> const& tensor, Extent const& extent,
+                      uint8_t* out_mask) {
+    auto mask = TensorMap<uint8_t, 3>(out_mask, Shape(extent, Channels::mask));
     for (int i = 0; i < mask.dimension(0); ++i) {
         for (int j = 0; j < mask.dimension(1); ++j) {
             mask(i, j, 0) = uint8_t(tensor(0, 0, i, j) > 0 ? 255 : 0);
         }
     }
-    return mask_image;
 }
 
-Segmentation Segmentation::process(ImageView const& input_image, Environment& env) {
-    auto& model = env.impl().segmentation();
-    auto image_tensor = create_image_tensor(input_image, model.image_shape);
+SegmentationImpl::SegmentationImpl(EnvironmentImpl& env) : env_(env), model_(env.segmentation()) {}
 
-    auto m = std::make_unique<Impl>(env.impl(), model);
-    m->original_extent = input_image.extent;
-    m->scaled_extent = input_image.extent;
-    m->image_embedding.resize(model.image_embedding_shape);
+void SegmentationImpl::process(ImageView const& input_image) {
+    auto image_tensor = create_image_tensor(input_image, model_.image_shape);
 
-    auto input = std::array{create_input(env.impl(), image_tensor)};
-    auto output = std::array{create_output(env.impl(), m->image_embedding)};
-    model.image_embedder.run(input, output);
+    original_extent_ = input_image.extent;
+    scaled_extent_ = input_image.extent;
+    image_embedding_.resize(model_.image_embedding_shape);
 
-    return Segmentation(std::move(m));
+    auto input = std::array{create_input(env_, image_tensor)};
+    auto output = std::array{create_output(env_, image_embedding_)};
+    model_.image_embedder.run(input, output);
 }
 
-Image Segmentation::Impl::get_mask(std::optional<Point> point, std::optional<Region> region) const {
-    ASSERT(point.has_value() || region.has_value());
+void SegmentationImpl::get_mask(Point const* point, Region const* region,
+                                uint8_t* result_mask) const {
+    ASSERT(point || region);
     auto image_size = TensorArray<float, 2>{};
     auto points = Tensor<float, 3>{};
     auto labels = Tensor<float, 2>{};
 
-    image_size.setValues({float(model.image_shape[2]), float(model.image_shape[3])});
-    if (point.has_value()) {
+    image_size.setValues({float(model_.image_shape[2]), float(model_.image_shape[3])});
+    if (point) {
         points.resize(Shape{1, 1, 2});
         points(0, 0, 0) = float(point->x);
         points(0, 0, 1) = float(point->y);
@@ -104,19 +102,10 @@ Image Segmentation::Impl::get_mask(std::optional<Point> point, std::optional<Reg
         labels(0, 0) = 2;
         labels(0, 1) = 3;
     }
-    auto output = model.mask_decoder(image_embedding, points, labels, model.input_mask,
-                                     model.has_mask, image_size);
+    auto output = model_.mask_decoder(image_embedding_, points, labels, model_.input_mask,
+                                      model_.has_mask, image_size);
 
-    return create_mask_image(as_tensor<float const, 4>(output[0]), scaled_extent);
+    write_mask_image(as_tensor<float const, 4>(output[0]), scaled_extent_, result_mask);
 }
-
-Image Segmentation::get_mask(Point point) const { return m_->get_mask(point, {}); }
-Image Segmentation::get_mask(Region region) const { return m_->get_mask({}, region); }
-
-Segmentation::Impl::Impl(EnvironmentImpl& env, SegmentationModel& model) : env(env), model(model) {}
-Segmentation::Segmentation(std::unique_ptr<Impl>&& impl) : m_(std::move(impl)) {}
-Segmentation::Segmentation(Segmentation&&) = default;
-Segmentation& Segmentation::operator=(Segmentation&&) = default;
-Segmentation::~Segmentation() = default;
 
 } // namespace dlimgedit
