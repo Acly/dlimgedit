@@ -39,12 +39,14 @@ if (MSVC)
     set_target_properties(dlimgedit PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
   endif()
 endif()
+
 install(TARGETS dlimgedit
   RUNTIME DESTINATION bin
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib)
-install(DIRECTORY include/ DESTINATION include)
 install(FILES ${DLIMGEDIT_RUNTIME_DEPENDENCIES} DESTINATION bin)
+install(DIRECTORY include/ DESTINATION include)
+install(DIRECTORY models/ DESTINATION models)
 
 if (DLIMGEDIT_TESTS)
   enable_testing()

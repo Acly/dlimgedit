@@ -3,6 +3,7 @@
 #include <dlimgedit/detail/dlimgedit.h>
 #include <dlimgedit/detail/handle.hpp>
 
+#include <array>
 #include <memory>
 #include <string>
 #ifndef DLIMGEDIT_NO_FILESYSTEM
@@ -12,19 +13,11 @@
 namespace dlimgedit {
 class Image;
 
-struct Point {
-    int x = 0;
-    int y = 0;
-};
+// Image
 
 struct Extent {
     int width = 0;
     int height = 0;
-};
-
-struct Region {
-    Point origin;
-    Extent extent;
 };
 
 enum class Channels { mask = 1, rgb = 3, rgba = 4 };
@@ -36,54 +29,9 @@ struct ImageView {
     uint8_t const* pixels = nullptr;
 
     ImageView() = default;
-    ImageView(Extent, uint8_t const* pixels, Channels = Channels::rgba);
+    ImageView(uint8_t const* pixels, Extent, Channels = Channels::rgba);
     ImageView(Image const&);
 };
-
-enum class Device { cpu, gpu };
-
-struct Options {
-    Device device = Device::cpu;
-    char const* model_path = "models";
-};
-
-void initialize(dlimg_Api const* = dlimg_init());
-
-class Environment : public Handle<dlimg_Environment_> {
-  public:
-    explicit Environment(Options const& = {});
-};
-
-// Segmentation
-
-class Segmentation : public Handle<dlimg_Segmentation_> {
-  public:
-    static Segmentation process(ImageView const& img, Environment&);
-
-    Image get_mask(Point) const;
-    void get_mask(Point, uint8_t* result_mask) const;
-
-    Image get_mask(Region) const;
-    void get_mask(Region, uint8_t* result_mask) const;
-
-    Extent extent() const;
-
-  private:
-    Segmentation();
-};
-
-// Error handling
-
-class Exception : public std::exception {
-  public:
-    explicit Exception(std::string msg) : msg_(std::move(msg)) {}
-    char const* what() const noexcept override { return msg_.c_str(); }
-
-  private:
-    std::string msg_;
-};
-
-// Tools
 
 class Image {
   public:
@@ -115,6 +63,72 @@ class Image {
     uint8_t* pixels_ = nullptr;
 };
 
+// Environment
+
+void initialize(dlimg_Api const* = dlimg_init());
+
+enum class Device { cpu, gpu };
+
+struct Options {
+    Device device = Device::cpu;
+    char const* model_path = "models";
+};
+
+class Environment : public Handle<dlimg_Environment_> {
+  public:
+    explicit Environment(Options const& = {});
+};
+
+// Segmentation
+
+struct Point {
+    int x = 0;
+    int y = 0;
+};
+
+struct Region {
+    Point top_left;
+    Point bottom_right;
+
+    Region() = default;
+    Region(Point top_left, Point bottom_right);
+    Region(Point origin, Extent extent);
+};
+
+class Segmentation : public Handle<dlimg_Segmentation_> {
+  public:
+    struct Mask {
+        Image image;
+        float accuracy = 0.0f;
+    };
+
+    static Segmentation process(ImageView const& img, Environment&);
+
+    Image get_mask(Point) const;
+    void get_mask(Point, uint8_t* result_mask) const;
+
+    std::array<Mask, 3> get_masks(Point) const;
+
+    Image get_mask(Region) const;
+    void get_mask(Region, uint8_t* result_mask) const;
+
+    Extent extent() const;
+
+  private:
+    Segmentation();
+};
+
+// Error handling
+
+class Exception : public std::exception {
+  public:
+    explicit Exception(std::string msg) : msg_(std::move(msg)) {}
+    char const* what() const noexcept override { return msg_.c_str(); }
+
+  private:
+    std::string msg_;
+};
+
 //
 // Implementation
 
@@ -128,7 +142,7 @@ inline void throw_on_error(dlimg_Result result) {
 
 // ImageView
 
-inline ImageView::ImageView(Extent extent, uint8_t const* pixels, Channels channels)
+inline ImageView::ImageView(uint8_t const* pixels, Extent extent, Channels channels)
     : extent(extent),
       channels(channels),
       stride(extent.width * static_cast<int>(channels)),
@@ -154,6 +168,22 @@ inline Environment::Environment(Options const& options) {
     throw_on_error(api().create_environment(&emplace(), to_api(options)));
 }
 
+// Point & Region
+
+inline bool operator==(Point a, Point b) { return a.x == b.x && a.y == b.y; }
+inline bool operator!=(Point a, Point b) { return !(a == b); }
+
+inline Region::Region(Point top_left, Point bottom_right)
+    : top_left(top_left), bottom_right(bottom_right) {}
+
+inline Region::Region(Point origin, Extent extent)
+    : top_left(origin), bottom_right(Point{origin.x + extent.width, origin.y + extent.height}) {}
+
+inline bool operator==(Region a, Region b) {
+    return a.top_left == b.top_left && a.bottom_right == b.bottom_right;
+}
+inline bool operator!=(Region a, Region b) { return !(a == b); }
+
 // Segmentation
 
 inline Segmentation::Segmentation() {}
@@ -166,7 +196,10 @@ inline Segmentation Segmentation::process(ImageView const& img, Environment& env
 }
 
 inline void Segmentation::get_mask(Point point, uint8_t* result_mask) const {
-    throw_on_error(api().get_segmentation_mask(handle(), &point.x, nullptr, result_mask));
+    auto masks = std::array<uint8_t*, 3>{result_mask, nullptr, nullptr};
+    auto ious = std::array<float, 3>{0.0f, 0.0f, 0.0f};
+    throw_on_error(
+        api().get_segmentation_mask(handle(), &point.x, nullptr, masks.data(), ious.data()));
 }
 
 inline Image Segmentation::get_mask(Point point) const {
@@ -175,8 +208,26 @@ inline Image Segmentation::get_mask(Point point) const {
     return result;
 }
 
+inline std::array<Segmentation::Mask, 3> Segmentation::get_masks(Point point) const {
+    auto result = std::array<Mask, 3>{Mask{Image(extent(), Channels::mask), 0.f},
+                                      Mask{Image(extent(), Channels::mask), 0.f},
+                                      Mask{Image(extent(), Channels::mask), 0.f}};
+    auto masks = std::array<uint8_t*, 3>{result[0].image.pixels(), result[1].image.pixels(),
+                                         result[2].image.pixels()};
+    auto ious = std::array<float, 3>{0.0f, 0.0f, 0.0f};
+    throw_on_error(
+        api().get_segmentation_mask(handle(), &point.x, nullptr, masks.data(), ious.data()));
+    result[0].accuracy = ious[0];
+    result[1].accuracy = ious[1];
+    result[2].accuracy = ious[2];
+    return result;
+}
+
 inline void Segmentation::get_mask(Region region, uint8_t* result_mask) const {
-    throw_on_error(api().get_segmentation_mask(handle(), nullptr, &region.origin.x, result_mask));
+    auto masks = std::array<uint8_t*, 3>{result_mask, nullptr, nullptr};
+    auto ious = std::array<float, 3>{0.0f, 0.0f, 0.0f};
+    throw_on_error(api().get_segmentation_mask(handle(), nullptr, &region.top_left.x, masks.data(),
+                                               ious.data()));
 }
 
 inline Image Segmentation::get_mask(Region region) const {

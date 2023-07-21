@@ -5,12 +5,13 @@
 #include "tensor.hpp"
 #include <dlimgedit/dlimgedit.hpp>
 
+#include <optional>
+#include <span>
+
 namespace dlimgedit {
 
-class SegmentationModel {
-  public:
+struct SegmentationModel {
     Session image_embedder;
-    Shape image_shape;
     Shape image_embedding_shape;
 
     Session mask_decoder;
@@ -20,24 +21,39 @@ class SegmentationModel {
     explicit SegmentationModel(EnvironmentImpl&);
 };
 
+struct ResizeLongestSide {
+    Extent original;
+    float scale = 1;
+
+    explicit ResizeLongestSide(int max_side);
+    ImageView resize(ImageView const& img);
+    Point transform(Point) const;
+
+  private:
+    int max_side_ = 0;
+    std::optional<Image> resized_;
+};
+
 class SegmentationImpl {
   public:
     SegmentationImpl(EnvironmentImpl& env);
     void process(ImageView const&);
-    void get_mask(Point const*, Region const*, uint8_t* out_mask) const;
+    void get_mask(Point const*, Region const*, std::span<uint8_t*, 3> out_masks,
+                  std::span<float, 3> out_accuracies) const;
 
-    Extent extent() const { return original_extent_; }
+    Extent extent() const { return image_size_.original; }
 
   private:
     EnvironmentImpl& env_;
     SegmentationModel& model_;
 
-    Extent original_extent_;
-    Extent scaled_extent_;
+    ResizeLongestSide image_size_;
     Tensor<float, 4> image_embedding_;
 };
 
-Tensor<uint8_t, 4> create_image_tensor(ImageView const&, Shape const&);
-void write_mask_image(TensorMap<float const, 4> const&, Extent const&, uint8_t* out_mask);
+Tensor<float, 3> create_image_tensor(ImageView const&);
+
+void write_mask_image(TensorMap<float const, 4> const&, int index, Extent const&,
+                      uint8_t* out_mask);
 
 } // namespace dlimgedit

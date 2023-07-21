@@ -10,7 +10,7 @@
 
 namespace dlimgedit {
 using Path = std::filesystem::path;
-class SegmentationModel;
+struct SegmentationModel;
 
 class EnvironmentImpl {
   public:

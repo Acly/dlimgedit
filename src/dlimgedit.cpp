@@ -53,10 +53,11 @@ dlimg_Result process_image_for_segmentation(dlimg_Segmentation* handle, dlimg_Im
 }
 
 dlimg_Result get_segmentation_mask(dlimg_Segmentation handle, int const* point, int const* region,
-                                   uint8_t* result_mask) {
+                                   uint8_t** result_masks, float* result_accuracy) {
     return try_([=] {
-        to_impl(handle).get_mask(reinterpret_cast<Point const*>(point),
-                                 reinterpret_cast<Region const*>(region), result_mask);
+        to_impl(handle).get_mask(
+            reinterpret_cast<Point const*>(point), reinterpret_cast<Region const*>(region),
+            std::span<uint8_t*, 3>(result_masks, 3), std::span<float, 3>(result_accuracy, 3));
     });
 }
 

@@ -1,6 +1,7 @@
 #include <dlimgedit/dlimgedit.hpp>
 
 #include <stb_image.h>
+#include <stb_image_resize.h>
 #include <stb_image_write.h>
 
 #include <format>
@@ -27,6 +28,19 @@ void save_image(ImageView const& img, char const* filepath) {
                         img.extent.width * comp)) {
         throw Exception(std::format("Failed to save image {}", filepath));
     }
+}
+
+Image resize(ImageView const& img, Extent target) {
+    auto resized = Image(target, img.channels);
+    int result =
+        stbir_resize_uint8_srgb(img.pixels, img.extent.width, img.extent.height, img.stride,
+                                resized.pixels(), resized.extent().width, resized.extent().height,
+                                0, int(img.channels), STBIR_ALPHA_CHANNEL_NONE, 0);
+    if (result == 0) {
+        throw Exception(std::format("Failed to resize image {}x{} to {}x{}", img.extent.width,
+                                    img.extent.height, target.width, target.height));
+    }
+    return resized;
 }
 
 } // namespace dlimgedit

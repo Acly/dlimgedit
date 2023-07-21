@@ -9,8 +9,8 @@ namespace dlimgedit {
 namespace detail {
 
 template <class To, class From>
-std::enable_if_t<sizeof(To) == sizeof(From) && std::is_trivially_copyable_v<From> &&
-                     std::is_trivially_copyable_v<To>,
+std::enable_if_t<sizeof(To) == sizeof(From) && std::is_trivially_copyable<From>::value &&
+                     std::is_trivially_copyable<To>::value,
                  To> inline bit_cast(From const& src) noexcept {
     To dst;
     std::memcpy(&dst, &src, sizeof(To));
@@ -20,7 +20,7 @@ std::enable_if_t<sizeof(To) == sizeof(From) && std::is_trivially_copyable_v<From
 template <typename T> struct Global {
     static dlimg_Api const* api_;
 };
-dlimg_Api const* Global<void>::api_ = nullptr;
+template <typename T> dlimg_Api const* Global<T>::api_{};
 
 } // namespace detail
 
