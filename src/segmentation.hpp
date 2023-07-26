@@ -14,11 +14,17 @@ struct SegmentationModel {
     Session image_embedder;
     Shape image_embedding_shape;
 
-    Session mask_decoder;
+    Session& single_mask_decoder();
+    Session& multi_mask_decoder();
     Tensor<float, 4> input_mask;    // always zero
     TensorArray<float, 1> has_mask; // always zero
 
     explicit SegmentationModel(EnvironmentImpl&);
+
+  private:
+    EnvironmentImpl& env_;
+    std::optional<Session> single_mask_decoder_;
+    std::optional<Session> multi_mask_decoder_;
 };
 
 struct ResizeLongestSide {

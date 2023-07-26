@@ -22,7 +22,7 @@ int scale_coord(int coord, float scale) { return int(coord * scale + 0.5f); }
 SegmentationModel::SegmentationModel(EnvironmentImpl& env)
     : image_embedder(env, "mobile_sam_image_encoder.onnx", image_embedder_input_names,
                      image_embedder_output_names),
-      mask_decoder(env, "mobile_sam.onnx", mask_decoder_input_names, mask_decoder_output_names) {
+      env_(env) {
 
     auto image_shape = image_embedder.input_shape(0);
     ASSERT(image_shape.rank() == 3);
@@ -35,6 +35,22 @@ SegmentationModel::SegmentationModel(EnvironmentImpl& env)
     input_mask = Tensor<float, 4>(Shape{1, 1, 256, 256});
     input_mask.setZero();
     has_mask.setZero();
+}
+
+Session& SegmentationModel::single_mask_decoder() {
+    if (!single_mask_decoder_) {
+        single_mask_decoder_.emplace(env_, "mobile_sam_single_mask.onnx", mask_decoder_input_names,
+                                     mask_decoder_output_names);
+    }
+    return *single_mask_decoder_;
+}
+
+Session& SegmentationModel::multi_mask_decoder() {
+    if (!multi_mask_decoder_) {
+        multi_mask_decoder_.emplace(env_, "mobile_sam_multi_mask.onnx", mask_decoder_input_names,
+                                    mask_decoder_output_names);
+    }
+    return *multi_mask_decoder_;
 }
 
 ResizeLongestSide::ResizeLongestSide(int max_side) : max_side_(max_side) {}
@@ -53,6 +69,11 @@ ImageView ResizeLongestSide::resize(ImageView const& img) {
 
 Point ResizeLongestSide::transform(Point p) const {
     return Point(scale_coord(p.x, scale), scale_coord(p.y, scale));
+}
+
+Point transform(Point p, Extent original, Extent scaled) {
+    float scale = float(scaled.width) / float(original.width);
+    return Point{int(p.x * scale + 0.5f), int(p.y * scale + 0.5f)};
 }
 
 Tensor<float, 3> create_image_tensor(ImageView const& image) {
@@ -103,11 +124,6 @@ void SegmentationImpl::process(ImageView const& input_image) {
     model_.image_embedder.run(input, output);
 }
 
-Point transform(Point p, Extent original, Extent scaled) {
-    float scale = float(scaled.width) / float(original.width);
-    return Point{int(p.x * scale + 0.5f), int(p.y * scale + 0.5f)};
-}
-
 void SegmentationImpl::get_mask(Point const* point, Region const* region,
                                 std::span<uint8_t*, 3> result_masks,
                                 std::span<float, 3> result_accuracy) const {
@@ -130,17 +146,21 @@ void SegmentationImpl::get_mask(Point const* point, Region const* region,
         set_point(0, region->top_left, 2);
         set_point(1, region->bottom_right, 3);
     }
-    auto output = model_.mask_decoder(image_embedding_, points, labels, model_.input_mask,
-                                      model_.has_mask, image_size);
+
+    bool is_single_mask = result_masks[1] == nullptr;
+    auto& mask_decoder =
+        is_single_mask ? model_.single_mask_decoder() : model_.multi_mask_decoder();
+    auto output = mask_decoder(image_embedding_, points, labels, model_.input_mask, model_.has_mask,
+                               image_size);
     auto masks = as_tensor<float const, 4>(output[0]);
     auto iou_predictions = as_tensor<float const, 2>(output[1]);
 
-    ASSERT(masks.dimension(1) == 4);
-    ASSERT(result_masks[0] != nullptr);
-    if (result_masks[1] == nullptr) {
-        TensorArray<int64_t, 1> best = iou_predictions.argmax(1);
-        write_mask_image(masks, int(best[0]), image_size_.original, result_masks[0]);
+    if (is_single_mask) {
+        ASSERT(result_masks[0] != nullptr);
+        ASSERT(masks.dimension(1) == 1);
+        write_mask_image(masks, 0, image_size_.original, result_masks[0]);
     } else {
+        ASSERT(masks.dimension(1) == 4);
         for (int i = 0; i < 3; ++i) {
             ASSERT(result_masks[i] != nullptr);
             write_mask_image(masks, i + 1, image_size_.original, result_masks[i]);
