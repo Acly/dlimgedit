@@ -33,6 +33,8 @@ template <typename F> dlimg_Result try_(F const& f) {
         f();
     } catch (std::exception const& e) {
         return set_last_error(e);
+    } catch (...) {
+        return set_last_error(std::runtime_error("Unknown error"));
     }
     return dlimg_success;
 }

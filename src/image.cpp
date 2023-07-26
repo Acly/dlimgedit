@@ -1,3 +1,4 @@
+#include "assert.hpp"
 #include <dlimgedit/dlimgedit.hpp>
 
 #include <stb_image.h>
@@ -35,11 +36,13 @@ void save_image(ImageView const& img, char const* filepath) {
 }
 
 Image resize(ImageView const& img, Extent target) {
+    ASSERT(img.stride >= img.extent.width * count(img.channels));
+
     auto resized = Image(target, img.channels);
     int result =
         stbir_resize_uint8_srgb(img.pixels, img.extent.width, img.extent.height, img.stride,
                                 resized.pixels(), resized.extent().width, resized.extent().height,
-                                0, int(img.channels), STBIR_ALPHA_CHANNEL_NONE, 0);
+                                0, count(img.channels), STBIR_ALPHA_CHANNEL_NONE, 0);
     if (result == 0) {
         throw Exception(std::format("Failed to resize image {}x{} to {}x{}", img.extent.width,
                                     img.extent.height, target.width, target.height));
