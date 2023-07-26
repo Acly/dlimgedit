@@ -60,6 +60,8 @@ template <typename T> class Handle {
 
     T* handle() const noexcept { return m_; }
 
+    explicit operator bool() const noexcept { return m_ != nullptr; }
+
   protected:
     T*& emplace() noexcept { return m_; }
 
