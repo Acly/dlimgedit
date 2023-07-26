@@ -20,7 +20,8 @@ struct Extent {
     int height = 0;
 };
 
-enum class Channels { mask = 1, rgb = 3, rgba = 4 };
+enum class Channels { mask = 1, rgb = 3, rgba = 4, bgra, argb };
+constexpr int count(Channels);
 
 struct ImageView {
     Extent extent;
@@ -41,7 +42,7 @@ class Image {
     Channels channels() const { return channels_; }
     uint8_t* pixels() { return pixels_; }
     uint8_t const* pixels() const { return pixels_; }
-    size_t size() const { return extent_.width * extent_.height * static_cast<int>(channels_); }
+    size_t size() const { return extent_.width * extent_.height * count(channels_); }
 
     static Image load(char const* filepath);
     static void save(ImageView const& img, char const* filepath);
@@ -142,16 +143,15 @@ inline void throw_on_error(dlimg_Result result) {
 
 // ImageView
 
+constexpr int count(Channels c) { return int(c) > 4 ? 4 : int(c); }
+
 inline ImageView::ImageView(uint8_t const* pixels, Extent extent, Channels channels)
-    : extent(extent),
-      channels(channels),
-      stride(extent.width * static_cast<int>(channels)),
-      pixels(pixels) {}
+    : extent(extent), channels(channels), stride(extent.width * count(channels)), pixels(pixels) {}
 
 inline ImageView::ImageView(Image const& img)
     : extent(img.extent()),
       channels(img.channels()),
-      stride(extent.width * static_cast<int>(channels)),
+      stride(extent.width * count(channels)),
       pixels(img.pixels()) {}
 
 inline dlimg_ImageView const* to_api(ImageView const& i) {
@@ -247,7 +247,7 @@ inline Extent Segmentation::extent() const {
 inline Image::Image(Extent extent, Channels channels)
     : extent_(extent),
       channels_(channels),
-      pixels_(api().create_image(extent.width, extent.height, static_cast<int>(channels))) {}
+      pixels_(api().create_image(extent.width, extent.height, count(channels))) {}
 
 inline Image::Image(Extent extent, Channels channels, uint8_t* pixels)
     : extent_(extent), channels_(channels), pixels_(pixels) {}

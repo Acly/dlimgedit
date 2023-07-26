@@ -33,8 +33,7 @@ class Shape {
     explicit Shape(int64_t a, int64_t b) : a_{a, b}, rank_(2) {}
     explicit Shape(int64_t a) : a_{a}, rank_(1) {}
     explicit Shape(Extent e) : a_{e.height, e.width}, rank_(2) {}
-    explicit Shape(Extent e, Channels c)
-        : a_{e.height, e.width, static_cast<int64_t>(c)}, rank_(3) {}
+    explicit Shape(Extent e, Channels c) : a_{e.height, e.width, int64_t(count(c))}, rank_(3) {}
     Shape(std::span<int64_t const> a) : rank_(a.size()) {
         ASSERT(rank_ <= 4);
         std::copy(a.begin(), a.end(), a_.begin());

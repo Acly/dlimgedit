@@ -2,6 +2,7 @@
 #include "segmentation.hpp"
 #include "test_utils.hpp"
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <dlimgedit/dlimgedit.hpp>
 
 #include <format>
@@ -54,14 +55,29 @@ TEST_CASE("Resize and transform", "[segmentation]") {
 }
 
 TEST_CASE("Image to tensor", "[segmentation]") {
-    auto img = Image(Extent{8, 6}, Channels::rgba);
+    auto channels = GENERATE(Channels::rgb, Channels::rgba, Channels::bgra, Channels::argb);
+    auto img = Image(Extent{8, 6}, channels);
     std::iota(img.pixels(), img.pixels() + img.size(), 0);
     auto tensor = create_image_tensor(img);
-    CHECK(tensor(0, 0, 0) == 0.f);
-    CHECK(tensor(0, 0, 1) == 1.f);
-    CHECK(tensor(0, 1, 0) == 4.f);
-    CHECK(tensor(0, 1, 1) == 5.f);
-    CHECK(tensor(1, 0, 0) == 32.f);
+
+    auto expected = std::array{0.f, 1.f, 2.f, 4.f, 5.f, 32.f};
+    switch (channels) {
+    case Channels::rgb:
+        expected = std::array{0.f, 1.f, 2.f, 3.f, 4.f, 24.f};
+        break;
+    case Channels::bgra:
+        expected = std::array{2.f, 1.f, 0.f, 6.f, 5.f, 34.f};
+        break;
+    case Channels::argb:
+        expected = std::array{1.f, 2.f, 3.f, 5.f, 6.f, 33.f};
+        break;
+    }
+    CHECK(tensor(0, 0, 0) == expected[0]);
+    CHECK(tensor(0, 0, 1) == expected[1]);
+    CHECK(tensor(0, 0, 2) == expected[2]);
+    CHECK(tensor(0, 1, 0) == expected[3]);
+    CHECK(tensor(0, 1, 1) == expected[4]);
+    CHECK(tensor(1, 0, 0) == expected[5]);
 }
 
 TEST_CASE("Tensor to mask", "[segmentation]") {

@@ -56,14 +56,24 @@ Point ResizeLongestSide::transform(Point p) const {
 }
 
 Tensor<float, 3> create_image_tensor(ImageView const& image) {
-    ASSERT(image.channels == Channels::rgba || image.channels == Channels::rgb);
-
+    auto cmap = std::array{0, 1, 2};
+    switch (image.channels) {
+    case Channels::mask:
+        cmap = {0, 0, 0};
+        break;
+    case Channels::bgra:
+        cmap = {2, 1, 0};
+        break;
+    case Channels::argb:
+        cmap = {1, 2, 3};
+        break;
+    }
     auto img = as_tensor(image);
     auto tensor = Tensor<float, 3>(Shape(image.extent, Channels::rgb));
     for (int i = 0; i < img.dimension(0); ++i) {
         for (int j = 0; j < img.dimension(1); ++j) {
             for (int k = 0; k < 3; ++k) {
-                tensor(i, j, k) = float(img(i, j, k));
+                tensor(i, j, k) = float(img(i, j, cmap[k]));
             }
         }
     }

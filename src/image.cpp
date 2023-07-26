@@ -23,7 +23,11 @@ uint8_t* load_image(char const* filepath, Extent* out_extent, int* out_channels)
 }
 
 void save_image(ImageView const& img, char const* filepath) {
-    int comp = static_cast<int>(img.channels);
+    if (!(img.channels == Channels::mask || img.channels == Channels::rgb ||
+          img.channels == Channels::rgba)) {
+        throw Exception(std::format("Unsupported channel order [{}]", int(img.channels)));
+    }
+    int comp = count(img.channels);
     if (!stbi_write_png(filepath, img.extent.width, img.extent.height, comp, img.pixels,
                         img.extent.width * comp)) {
         throw Exception(std::format("Failed to save image {}", filepath));

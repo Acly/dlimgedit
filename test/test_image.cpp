@@ -3,25 +3,18 @@
 #include <image.hpp>
 
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/reporters/catch_reporter_event_listener.hpp>
-#include <catch2/reporters/catch_reporter_registrars.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 namespace dlimg {
 
-class ResultCleanup : public Catch::EventListenerBase {
-  public:
-    using Catch::EventListenerBase::EventListenerBase;
-
-    void testRunStarting(Catch::TestRunInfo const&) override {
-        auto results_dir = test_dir() / "result";
-        if (exists(results_dir)) {
-            remove_all(results_dir);
-        }
-        create_directory(results_dir);
-    }
-};
-
-CATCH_REGISTER_LISTENER(ResultCleanup)
+TEST_CASE("Image formats", "[image]") {
+    auto channels =
+        GENERATE(Channels::mask, Channels::rgb, Channels::rgba, Channels::bgra, Channels::argb);
+    auto const img = Image(Extent{8, 6}, channels);
+    CHECK(img.size() == 8 * 6 * count(channels));
+    CHECK(img.size() <= 8 * 6 * 4);
+    CHECK(img.size() >= 8 * 6 * 1);
+}
 
 TEST_CASE("Image load", "[image]") {
     auto const img = Image::load(test_dir() / "input" / "cat_and_hat.png");

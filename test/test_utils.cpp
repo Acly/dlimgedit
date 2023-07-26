@@ -2,10 +2,27 @@
 #include "tensor.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/reporters/catch_reporter_event_listener.hpp>
+#include <catch2/reporters/catch_reporter_registrars.hpp>
 
 #include <cmath>
 
 namespace dlimg {
+
+class ResultCleanup : public Catch::EventListenerBase {
+  public:
+    using Catch::EventListenerBase::EventListenerBase;
+
+    void testRunStarting(Catch::TestRunInfo const&) override {
+        auto results_dir = test_dir() / "result";
+        if (exists(results_dir)) {
+            remove_all(results_dir);
+        }
+        create_directory(results_dir);
+    }
+};
+
+CATCH_REGISTER_LISTENER(ResultCleanup)
 
 Path const& root_dir() {
     static Path const path = []() {
