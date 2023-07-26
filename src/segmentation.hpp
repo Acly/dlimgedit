@@ -1,7 +1,8 @@
 #pragma once
 
-#include "environment.hpp"
 #include "image.hpp"
+#include "lazy.hpp"
+#include "session.hpp"
 #include "tensor.hpp"
 #include <dlimgedit/dlimgedit.hpp>
 
@@ -9,6 +10,7 @@
 #include <span>
 
 namespace dlimg {
+class EnvironmentImpl;
 
 struct SegmentationModel {
     Session image_embedder;
@@ -23,8 +25,8 @@ struct SegmentationModel {
 
   private:
     EnvironmentImpl& env_;
-    std::optional<Session> single_mask_decoder_;
-    std::optional<Session> multi_mask_decoder_;
+    Lazy<Session> single_mask_decoder_;
+    Lazy<Session> multi_mask_decoder_;
 };
 
 struct ResizeLongestSide {

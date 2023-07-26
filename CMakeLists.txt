@@ -19,6 +19,7 @@ target_sources(dlimgedit PRIVATE
   src/image.cpp
   src/tensor.cpp
   src/segmentation.cpp
+  src/session.cpp
 )
 target_compile_definitions(dlimgedit PRIVATE DLIMGEDIT_EXPORTS)
 target_include_directories(dlimgedit PUBLIC include PRIVATE src)

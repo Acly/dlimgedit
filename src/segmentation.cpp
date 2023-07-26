@@ -1,5 +1,6 @@
 #include "segmentation.hpp"
 #include "assert.hpp"
+#include "environment.hpp"
 #include "image.hpp"
 #include "tensor.hpp"
 
@@ -38,19 +39,13 @@ SegmentationModel::SegmentationModel(EnvironmentImpl& env)
 }
 
 Session& SegmentationModel::single_mask_decoder() {
-    if (!single_mask_decoder_) {
-        single_mask_decoder_.emplace(env_, "mobile_sam_single_mask.onnx", mask_decoder_input_names,
-                                     mask_decoder_output_names);
-    }
-    return *single_mask_decoder_;
+    return single_mask_decoder_.get_or_create(env_, "mobile_sam_single_mask.onnx",
+                                              mask_decoder_input_names, mask_decoder_output_names);
 }
 
 Session& SegmentationModel::multi_mask_decoder() {
-    if (!multi_mask_decoder_) {
-        multi_mask_decoder_.emplace(env_, "mobile_sam_multi_mask.onnx", mask_decoder_input_names,
-                                    mask_decoder_output_names);
-    }
-    return *multi_mask_decoder_;
+    return multi_mask_decoder_.get_or_create(env_, "mobile_sam_multi_mask.onnx",
+                                             mask_decoder_input_names, mask_decoder_output_names);
 }
 
 ResizeLongestSide::ResizeLongestSide(int max_side) : max_side_(max_side) {}
