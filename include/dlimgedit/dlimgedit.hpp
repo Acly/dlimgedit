@@ -78,6 +78,8 @@ struct Options {
 class Environment : public Handle<dlimg_Environment_> {
   public:
     explicit Environment(Options const& = {});
+
+    Environment(std::nullptr_t) noexcept;
 };
 
 // Segmentation
@@ -115,8 +117,7 @@ class Segmentation : public Handle<dlimg_Segmentation_> {
 
     Extent extent() const;
 
-  private:
-    Segmentation();
+    Segmentation(std::nullptr_t) noexcept;
 };
 
 // Error handling
@@ -168,6 +169,8 @@ inline Environment::Environment(Options const& options) {
     throw_on_error(api().create_environment(&emplace(), to_api(options)));
 }
 
+inline Environment::Environment(std::nullptr_t) noexcept {}
+
 // Point & Region
 
 inline bool operator==(Point a, Point b) { return a.x == b.x && a.y == b.y; }
@@ -186,10 +189,10 @@ inline bool operator!=(Region a, Region b) { return !(a == b); }
 
 // Segmentation
 
-inline Segmentation::Segmentation() {}
+inline Segmentation::Segmentation(std::nullptr_t) noexcept {}
 
 inline Segmentation Segmentation::process(ImageView const& img, Environment const& env) {
-    auto result = Segmentation();
+    auto result = Segmentation(nullptr);
     throw_on_error(
         api().process_image_for_segmentation(&result.emplace(), to_api(img), env.handle()));
     return result;
