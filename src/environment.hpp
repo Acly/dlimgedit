@@ -6,9 +6,10 @@
 #include <onnxruntime_cxx_api.h>
 
 #include <filesystem>
+#include <mutex>
 #include <type_traits>
 
-namespace dlimgedit {
+namespace dlimg {
 using Path = std::filesystem::path;
 struct SegmentationModel;
 
@@ -30,6 +31,7 @@ class EnvironmentImpl {
 
   private:
     std::unique_ptr<SegmentationModel> segmentation_;
+    std::mutex mutex_;
 };
 
 template <typename Tensor>
@@ -70,4 +72,4 @@ class Session {
     std::span<char const* const> output_names_;
 };
 
-} // namespace dlimgedit
+} // namespace dlimg

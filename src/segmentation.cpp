@@ -3,7 +3,7 @@
 #include "image.hpp"
 #include "tensor.hpp"
 
-namespace dlimgedit {
+namespace dlimg {
 namespace {
 
 const auto image_embedder_input_names = std::array{"input_image"};
@@ -45,7 +45,7 @@ ImageView ResizeLongestSide::resize(ImageView const& img) {
     if (scale != 1) {
         auto target =
             Extent(scale_coord(img.extent.width, scale), scale_coord(img.extent.height, scale));
-        resized_ = dlimgedit::resize(img, target);
+        resized_ = dlimg::resize(img, target);
         return *resized_;
     }
     return img;
@@ -139,4 +139,4 @@ void SegmentationImpl::get_mask(Point const* point, Region const* region,
     }
 }
 
-} // namespace dlimgedit
+} // namespace dlimg

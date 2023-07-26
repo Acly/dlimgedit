@@ -6,7 +6,7 @@
 #include <catch2/reporters/catch_reporter_event_listener.hpp>
 #include <catch2/reporters/catch_reporter_registrars.hpp>
 
-namespace dlimgedit {
+namespace dlimg {
 
 class ResultCleanup : public Catch::EventListenerBase {
   public:
@@ -75,4 +75,4 @@ TEST_CASE("Image resize", "[image]") {
     }
 }
 
-} // namespace dlimgedit
+} // namespace dlimg

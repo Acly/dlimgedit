@@ -3,7 +3,7 @@
 
 #include <thread>
 
-namespace dlimgedit {
+namespace dlimg {
 
 Path EnvironmentImpl::verify_path(std::string_view path) {
     Path const p = std::filesystem::absolute(path);
@@ -34,7 +34,10 @@ EnvironmentImpl::EnvironmentImpl(Options const& opts)
 
 SegmentationModel& EnvironmentImpl::segmentation() {
     if (!segmentation_) {
-        segmentation_ = std::make_unique<SegmentationModel>(*this);
+        std::lock_guard lock(mutex_);
+        if (!segmentation_) {
+            segmentation_ = std::make_unique<SegmentationModel>(*this);
+        }
     }
     return *segmentation_;
 }
@@ -86,4 +89,4 @@ std::vector<Ort::Value> Session::run(std::span<Ort::Value const> inputs) {
 
 EnvironmentImpl::~EnvironmentImpl() = default;
 
-} // namespace dlimgedit
+} // namespace dlimg

@@ -8,7 +8,7 @@
 #include <optional>
 #include <span>
 
-namespace dlimgedit {
+namespace dlimg {
 
 struct SegmentationModel {
     Session image_embedder;
@@ -44,7 +44,7 @@ class SegmentationImpl {
     Extent extent() const { return image_size_.original; }
 
   private:
-    EnvironmentImpl& env_;
+    EnvironmentImpl const& env_;
     SegmentationModel& model_;
 
     ResizeLongestSide image_size_;
@@ -56,4 +56,4 @@ Tensor<float, 3> create_image_tensor(ImageView const&);
 void write_mask_image(TensorMap<float const, 4> const&, int index, Extent const&,
                       uint8_t* out_mask);
 
-} // namespace dlimgedit
+} // namespace dlimg

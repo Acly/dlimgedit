@@ -4,7 +4,7 @@
 
 #include <filesystem>
 
-namespace dlimgedit {
+namespace dlimg {
 using Path = std::filesystem::path;
 
 Path const& root_dir();
@@ -16,4 +16,4 @@ Environment default_env();
 float rmse(ImageView const&, ImageView const&);
 void check_image_matches(ImageView const&, std::string_view reference, float max_rmse = 0.001f);
 
-} // namespace dlimgedit
+} // namespace dlimg

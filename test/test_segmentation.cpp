@@ -7,7 +7,7 @@
 #include <format>
 #include <numeric>
 
-namespace dlimgedit {
+namespace dlimg {
 
 TEST_CASE("Resize longest side", "[segmentation]") {
     SECTION("height") {
@@ -132,4 +132,4 @@ TEST_CASE("Segmentation on GPU", "[segmentation]") {
     }
 }
 
-} // namespace dlimgedit
+} // namespace dlimg

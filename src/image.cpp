@@ -6,7 +6,7 @@
 
 #include <format>
 
-namespace dlimgedit {
+namespace dlimg {
 
 uint8_t* load_image(char const* filepath, Extent* out_extent, int* out_channels) {
     auto const pixels =
@@ -43,4 +43,4 @@ Image resize(ImageView const& img, Extent target) {
     return resized;
 }
 
-} // namespace dlimgedit
+} // namespace dlimg

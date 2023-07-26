@@ -5,7 +5,7 @@
 #include <dlimgedit/detail/handle.hpp>
 #include <dlimgedit/dlimgedit.hpp>
 
-namespace dlimgedit {
+namespace dlimg {
 using detail::bit_cast;
 
 dlimg_Api api_;
@@ -85,23 +85,23 @@ void destroy_image(uint8_t const* pixels) { delete[] pixels; }
 
 char const* last_error() { return last_error_.c_str(); }
 
-} // namespace dlimgedit
+} // namespace dlimg
 
 extern "C" {
 
 dlimg_Api const* dlimg_init() {
-    dlimgedit::api_.create_environment = dlimgedit::create_environment;
-    dlimgedit::api_.destroy_environment = dlimgedit::destroy_environment;
-    dlimgedit::api_.process_image_for_segmentation = dlimgedit::process_image_for_segmentation;
-    dlimgedit::api_.get_segmentation_mask = dlimgedit::get_segmentation_mask;
-    dlimgedit::api_.get_segmentation_extent = dlimgedit::get_segmentation_extent;
-    dlimgedit::api_.destroy_segmentation = dlimgedit::destroy_segmentation;
-    dlimgedit::api_.load_image = dlimgedit::load_image_api;
-    dlimgedit::api_.save_image = dlimgedit::save_image_api;
-    dlimgedit::api_.create_image = dlimgedit::create_image;
-    dlimgedit::api_.destroy_image = dlimgedit::destroy_image;
-    dlimgedit::api_.last_error = dlimgedit::last_error;
-    return &dlimgedit::api_;
+    dlimg::api_.create_environment = dlimg::create_environment;
+    dlimg::api_.destroy_environment = dlimg::destroy_environment;
+    dlimg::api_.process_image_for_segmentation = dlimg::process_image_for_segmentation;
+    dlimg::api_.get_segmentation_mask = dlimg::get_segmentation_mask;
+    dlimg::api_.get_segmentation_extent = dlimg::get_segmentation_extent;
+    dlimg::api_.destroy_segmentation = dlimg::destroy_segmentation;
+    dlimg::api_.load_image = dlimg::load_image_api;
+    dlimg::api_.save_image = dlimg::save_image_api;
+    dlimg::api_.create_image = dlimg::create_image;
+    dlimg::api_.destroy_image = dlimg::destroy_image;
+    dlimg::api_.last_error = dlimg::last_error;
+    return &dlimg::api_;
 }
 
 } // extern "C"

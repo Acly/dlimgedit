@@ -10,7 +10,7 @@
 #    include <filesystem>
 #endif
 
-namespace dlimgedit {
+namespace dlimg {
 class Image;
 
 // Image
@@ -102,7 +102,7 @@ class Segmentation : public Handle<dlimg_Segmentation_> {
         float accuracy = 0.0f;
     };
 
-    static Segmentation process(ImageView const& img, Environment&);
+    static Segmentation process(ImageView const& img, Environment const&);
 
     Image get_mask(Point) const;
     void get_mask(Point, uint8_t* result_mask) const;
@@ -188,7 +188,7 @@ inline bool operator!=(Region a, Region b) { return !(a == b); }
 
 inline Segmentation::Segmentation() {}
 
-inline Segmentation Segmentation::process(ImageView const& img, Environment& env) {
+inline Segmentation Segmentation::process(ImageView const& img, Environment const& env) {
     auto result = Segmentation();
     throw_on_error(
         api().process_image_for_segmentation(&result.emplace(), to_api(img), env.handle()));
@@ -292,4 +292,4 @@ inline void Image::save(ImageView const& img, std::filesystem::path const& filep
 constexpr bool operator==(Extent a, Extent b) { return a.width == b.width && a.height == b.height; }
 constexpr bool operator!=(Extent a, Extent b) { return !(a == b); }
 
-} // namespace dlimgedit
+} // namespace dlimg

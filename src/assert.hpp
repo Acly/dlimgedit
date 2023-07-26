@@ -6,7 +6,7 @@
 #include <format>
 #include <string_view>
 
-namespace dlimgedit {
+namespace dlimg {
 
 class AssertionFailure : public Exception {
   public:
@@ -19,7 +19,7 @@ inline void assertion_failure(char const* file, int line, char const* expr) {
     throw AssertionFailure(msg);
 }
 
-} // namespace dlimgedit
+} // namespace dlimg
 
 #define ASSERT(cond)                                                                               \
     if (!(cond)) {                                                                                 \

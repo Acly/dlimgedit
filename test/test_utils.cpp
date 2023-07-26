@@ -5,7 +5,7 @@
 
 #include <cmath>
 
-namespace dlimgedit {
+namespace dlimg {
 
 Path const& root_dir() {
     static Path const path = []() {
@@ -60,4 +60,4 @@ void check_image_matches(ImageView const& image, std::string_view reference, flo
     CHECK(error < threshold);
 }
 
-} // namespace dlimgedit
+} // namespace dlimg

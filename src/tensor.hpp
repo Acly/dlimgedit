@@ -18,7 +18,7 @@
 #include <numeric>
 #include <span>
 
-namespace dlimgedit {
+namespace dlimg {
 
 template <typename Scalar, int Rank> using Tensor = Eigen::Tensor<Scalar, Rank, Eigen::RowMajor>;
 template <typename Scalar, int Rank> using TensorMap = Eigen::TensorMap<Tensor<Scalar, Rank>>;
@@ -89,4 +89,4 @@ template <typename T, int64_t Rank> TensorMap<T, Rank> as_tensor(Ort::Value& val
 TensorMap<uint8_t, 3> as_tensor(Image&);
 TensorMap<uint8_t const, 3> as_tensor(ImageView);
 
-} // namespace dlimgedit
+} // namespace dlimg

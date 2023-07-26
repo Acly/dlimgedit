@@ -5,7 +5,7 @@
 #include <cstring>
 #include <type_traits>
 
-namespace dlimgedit {
+namespace dlimg {
 namespace detail {
 
 template <class To, class From>
@@ -67,4 +67,4 @@ template <typename T> class Handle {
     T* m_ = nullptr;
 };
 
-} // namespace dlimgedit
+} // namespace dlimg
