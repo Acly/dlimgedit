@@ -7,10 +7,13 @@
 namespace dlimg {
 namespace {
 
+const auto image_embedder_model = "mobile_sam_image_encoder.onnx";
 const auto image_embedder_input_names = std::array{"input_image"};
 const auto image_embedder_output_names = std::array{"image_embeddings"};
 const auto image_input_size = 1024;
 
+const auto mask_decoder_single_model = "sam_mask_decoder_single.onnx";
+const auto mask_decoder_multi_model = "sam_mask_decoder_multi.onnx";
 const auto mask_decoder_input_names =
     std::array{"image_embeddings", "point_coords",   "point_labels",
                "mask_input",       "has_mask_input", "orig_im_size"};
@@ -21,7 +24,7 @@ int scale_coord(int coord, float scale) { return int(coord * scale + 0.5f); }
 } // namespace
 
 SegmentationModel::SegmentationModel(EnvironmentImpl& env)
-    : image_embedder(env, "mobile_sam_image_encoder.onnx", image_embedder_input_names,
+    : image_embedder(env, image_embedder_model, image_embedder_input_names,
                      image_embedder_output_names),
       env_(env) {
 
@@ -39,12 +42,12 @@ SegmentationModel::SegmentationModel(EnvironmentImpl& env)
 }
 
 Session& SegmentationModel::single_mask_decoder() {
-    return single_mask_decoder_.get_or_create(env_, "mobile_sam_single_mask.onnx",
+    return single_mask_decoder_.get_or_create(env_, mask_decoder_single_model,
                                               mask_decoder_input_names, mask_decoder_output_names);
 }
 
 Session& SegmentationModel::multi_mask_decoder() {
-    return multi_mask_decoder_.get_or_create(env_, "mobile_sam_multi_mask.onnx",
+    return multi_mask_decoder_.get_or_create(env_, mask_decoder_multi_model,
                                              mask_decoder_input_names, mask_decoder_output_names);
 }
 
