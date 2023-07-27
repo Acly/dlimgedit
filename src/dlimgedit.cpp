@@ -39,6 +39,10 @@ template <typename F> dlimg_Result try_(F const& f) {
     return dlimg_success;
 }
 
+int is_backend_supported(dlimg_Backend backend) {
+    return EnvironmentImpl::is_supported(Backend(backend)) ? 1 : 0;
+}
+
 dlimg_Result create_environment(dlimg_Environment* handle, dlimg_Options const* options) {
     return try_([=] { *handle = to_handle(new EnvironmentImpl(bit_cast<Options>(*options))); });
 }
@@ -92,6 +96,7 @@ char const* last_error() { return last_error_.c_str(); }
 extern "C" {
 
 dlimg_Api const* dlimg_init() {
+    dlimg::api_.is_backend_supported = dlimg::is_backend_supported;
     dlimg::api_.create_environment = dlimg::create_environment;
     dlimg::api_.destroy_environment = dlimg::destroy_environment;
     dlimg::api_.process_image_for_segmentation = dlimg::process_image_for_segmentation;

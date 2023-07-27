@@ -121,9 +121,12 @@ TEST_CASE("Segmentation", "[segmentation]") {
 }
 
 TEST_CASE("Segmentation on GPU", "[segmentation]") {
+    if (!Environment::is_supported(Backend::gpu)) {
+        SKIP("GPU not supported");
+    }
     auto model_path = model_dir().string();
     auto opts = Options{};
-    opts.device = Device::gpu;
+    opts.backend = Backend::gpu;
     opts.model_path = model_path.c_str();
     auto env = Environment(opts);
     {

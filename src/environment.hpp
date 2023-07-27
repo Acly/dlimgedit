@@ -17,13 +17,14 @@ struct SegmentationModel;
 
 class EnvironmentImpl {
   public:
-    Device device = Device::cpu;
+    Backend backend = Backend::cpu;
     Path model_path;
     int thread_count = 1;
     Ort::Env onnx_env;
     Ort::MemoryInfo memory_info;
 
     static Path verify_path(std::string_view path);
+    static bool is_supported(Backend);
 
     EnvironmentImpl(Options const&);
 

@@ -16,6 +16,18 @@ Path EnvironmentImpl::verify_path(std::string_view path) {
     return p;
 }
 
+bool EnvironmentImpl::is_supported(Backend backend) {
+    auto providers = Ort::GetAvailableProviders();
+    switch (backend) {
+    case Backend::cpu:
+        return true;
+    case Backend::gpu:
+        return std::find(providers.begin(), providers.end(), "CUDAExecutionProvider") !=
+               providers.end();
+    }
+    return false;
+}
+
 Ort::Env init_onnx() {
     if (OrtGetApiBase()->GetApi(ORT_API_VERSION) == nullptr) {
         throw Exception("Could not load onnxruntime library, version mismatch");
@@ -26,7 +38,7 @@ Ort::Env init_onnx() {
 }
 
 EnvironmentImpl::EnvironmentImpl(Options const& opts)
-    : device(opts.device),
+    : backend(opts.backend),
       model_path(verify_path(opts.model_path)),
       thread_count(std::thread::hardware_concurrency()),
       onnx_env(init_onnx()),

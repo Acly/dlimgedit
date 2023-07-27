@@ -68,15 +68,17 @@ class Image {
 
 void initialize(dlimg_Api const* = dlimg_init());
 
-enum class Device { cpu, gpu };
+enum class Backend { cpu, gpu };
 
 struct Options {
-    Device device = Device::cpu;
+    Backend backend = Backend::cpu;
     char const* model_path = "models";
 };
 
 class Environment : public Handle<dlimg_Environment_> {
   public:
+    static bool is_supported(Backend);
+
     explicit Environment(Options const& = {});
 
     Environment(std::nullptr_t) noexcept;
@@ -160,6 +162,10 @@ inline dlimg_ImageView const* to_api(ImageView const& i) {
 }
 
 // Environment
+
+inline bool Environment::is_supported(Backend d) {
+    return api().is_backend_supported(dlimg_Backend(int(d))) != 0;
+}
 
 inline dlimg_Options const* to_api(Options const& o) {
     return reinterpret_cast<dlimg_Options const*>(&o);

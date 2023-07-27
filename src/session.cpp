@@ -7,7 +7,7 @@ Ort::Session create_session(EnvironmentImpl& env, char const* model) {
     Ort::SessionOptions opts;
     opts.SetIntraOpNumThreads(env.thread_count);
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-    if (env.device == Device::gpu) {
+    if (env.backend == Backend::gpu) {
         opts.AppendExecutionProvider_CUDA({});
     }
     Path model_path = env.model_path / model;

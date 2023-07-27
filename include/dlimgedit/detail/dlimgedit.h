@@ -32,16 +32,18 @@ typedef struct dlimg_ImageView {
     uint8_t* pixels;
 } dlimg_ImageView;
 
-typedef enum dlimg_Device { dlimg_cpu, dlimg_gpu } dlimg_Device;
+typedef enum dlimg_Backend { dlimg_cpu, dlimg_gpu } dlimg_Backend;
 
 typedef struct dlimg_Options {
-    dlimg_Device device;
+    dlimg_Backend backend;
     char const* model_path;
 } dlimg_Options;
 
 typedef enum dlimg_Result { dlimg_success, dlimg_error } dlimg_Result;
 
 struct dlimg_Api {
+    int (*is_backend_supported)(dlimg_Backend);
+
     dlimg_Result (*create_environment)(dlimg_Environment*, dlimg_Options const*);
     void (*destroy_environment)(dlimg_Environment);
 
