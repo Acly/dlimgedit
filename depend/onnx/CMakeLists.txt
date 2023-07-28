@@ -22,3 +22,9 @@ set_target_properties(onnxruntime PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES ${onnxruntime_SOURCE_DIR}/include
 )
 add_dependencies(onnxruntime onnxruntime_providers_shared onnxruntime_providers_cuda)
+
+set(ONNX_RUNTIME_DEPENDENCIES
+  $<TARGET_FILE:onnxruntime>
+  $<TARGET_FILE:onnxruntime_providers_shared>
+  $<TARGET_FILE:onnxruntime_providers_cuda>
+  PARENT_SCOPE)
