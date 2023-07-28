@@ -24,7 +24,7 @@ int scale_coord(int coord, float scale) { return int(coord * scale + 0.5f); }
 } // namespace
 
 SegmentationModel::SegmentationModel(EnvironmentImpl& env)
-    : image_embedder(env, image_embedder_model, image_embedder_input_names,
+    : image_embedder(env, "segmentation", image_embedder_model, image_embedder_input_names,
                      image_embedder_output_names),
       env_(env) {
 
@@ -42,12 +42,12 @@ SegmentationModel::SegmentationModel(EnvironmentImpl& env)
 }
 
 Session& SegmentationModel::single_mask_decoder() {
-    return single_mask_decoder_.get_or_create(env_, mask_decoder_single_model,
+    return single_mask_decoder_.get_or_create(env_, "segmentation", mask_decoder_single_model,
                                               mask_decoder_input_names, mask_decoder_output_names);
 }
 
 Session& SegmentationModel::multi_mask_decoder() {
-    return multi_mask_decoder_.get_or_create(env_, mask_decoder_multi_model,
+    return multi_mask_decoder_.get_or_create(env_, "segmentation", mask_decoder_multi_model,
                                              mask_decoder_input_names, mask_decoder_output_names);
 }
 

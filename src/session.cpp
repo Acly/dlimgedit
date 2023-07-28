@@ -3,22 +3,26 @@
 
 namespace dlimg {
 
-Ort::Session create_session(EnvironmentImpl& env, char const* model) {
+Ort::Session create_session(EnvironmentImpl& env, char const* kind, char const* model) {
     Ort::SessionOptions opts;
     opts.SetIntraOpNumThreads(env.thread_count);
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
     if (env.backend == Backend::gpu) {
         opts.AppendExecutionProvider_CUDA({});
     }
-    Path model_path = env.model_directory / model;
+    Path model_path = env.model_directory / kind / model;
+    if (!exists(model_path)) {
+        throw Exception(std::format("Could not find model '{}/{}' in directory '{}'.", kind, model,
+                                    env.model_directory.string()));
+    }
     return Ort::Session(env.onnx_env, model_path.c_str(), opts);
 }
 
-Session::Session(EnvironmentImpl& env, char const* model_name,
+Session::Session(EnvironmentImpl& env, char const* model_kind, char const* model_name,
                  std::span<char const* const> input_names,
                  std::span<char const* const> output_names)
     : env_(env),
-      session_(create_session(env, model_name)),
+      session_(create_session(env, model_kind, model_name)),
       input_names_(input_names),
       output_names_(output_names) {
     ASSERT(input_names.size() == session_.GetInputCount());

@@ -29,8 +29,8 @@ template <typename Tensor> Ort::Value create_output(EnvironmentImpl const& env, 
 
 class Session {
   public:
-    Session(EnvironmentImpl& env, char const* model_name, std::span<char const* const> input_names,
-            std::span<char const* const> output_names);
+    Session(EnvironmentImpl& env, char const* model_kind, char const* model_name,
+            std::span<char const* const> input_names, std::span<char const* const> output_names);
 
     Shape input_shape(int index) const;
     Shape output_shape(int index) const;
