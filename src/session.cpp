@@ -10,7 +10,7 @@ Ort::Session create_session(EnvironmentImpl& env, char const* model) {
     if (env.backend == Backend::gpu) {
         opts.AppendExecutionProvider_CUDA({});
     }
-    Path model_path = env.model_path / model;
+    Path model_path = env.model_directory / model;
     return Ort::Session(env.onnx_env, model_path.c_str(), opts);
 }
 

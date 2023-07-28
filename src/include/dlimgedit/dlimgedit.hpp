@@ -1,3 +1,6 @@
+// dlimgedit.hpp
+// C++ library for image painting and editing workflows which make use of deep learning
+
 #pragma once
 
 #include <dlimgedit/detail/dlimgedit.h>
@@ -13,38 +16,50 @@
 namespace dlimg {
 class Image;
 
+//
 // Image
 
+// Resolution of an image or size of an image region.
 struct Extent {
     int width = 0;
     int height = 0;
 };
 
+// Channel order of image pixels. Each channel is 1 byte (uint8).
 enum class Channels { mask = 1, rgb = 3, rgba = 4, bgra, argb };
+
+// Returns number of channels for a pixel.
 constexpr int count(Channels);
 
+// Read-only view of an image. Does not own the pixel data.
+// Pixel data is expected to be row-major, with the origin in the top left corner.
 struct ImageView {
     Extent extent;
     Channels channels = Channels::rgba;
-    int stride = 0;
+    int stride = 0; // size of one row of pixels, in bytes
     uint8_t const* pixels = nullptr;
 
-    ImageView() = default;
-    ImageView(uint8_t const* pixels, Extent, Channels = Channels::rgba);
-    ImageView(Image const&);
+    ImageView() noexcept = default;
+    ImageView(uint8_t const* pixels, Extent, Channels = Channels::rgba) noexcept;
+    ImageView(Image const&) noexcept;
 };
 
+// Represents an image made up of packed pixel data.
 class Image {
   public:
+    // Allocate memory for a new image. Pixel data is uninitialized.
     explicit Image(Extent, Channels = Channels::rgba);
 
-    Extent extent() const { return extent_; }
-    Channels channels() const { return channels_; }
-    uint8_t* pixels() { return pixels_; }
-    uint8_t const* pixels() const { return pixels_; }
-    size_t size() const { return extent_.width * extent_.height * count(channels_); }
+    Extent extent() const noexcept { return extent_; }
+    Channels channels() const noexcept { return channels_; }
+    uint8_t* pixels() noexcept { return pixels_; }
+    uint8_t const* pixels() const noexcept { return pixels_; }
+    size_t size() const noexcept; // in bytes
 
+    // Read an image from a file. Supported formats are PNG, JPEG, BMP, TGA.
     static Image load(char const* filepath);
+
+    // Store an image as a PNG file.
     static void save(ImageView const& img, char const* filepath);
 
 #ifndef DLIMGEDIT_NO_FILESYSTEM
@@ -55,6 +70,8 @@ class Image {
     ~Image();
     Image(Image&&) noexcept;
     Image& operator=(Image&&) noexcept;
+    Image(Image const&) = delete;
+    Image& operator=(Image const&) = delete;
 
   private:
     Image(Extent, Channels, uint8_t*);
@@ -64,66 +81,98 @@ class Image {
     uint8_t* pixels_ = nullptr;
 };
 
-// Environment
+//
+// Neural network inference environment
 
-void initialize(dlimg_Api const* = dlimg_init());
-
+// The hardware to use for inference. The GPU backend requires a CUDA-capable NVIDIA graphics card.
 enum class Backend { cpu, gpu };
 
+// Deep learning model search paths and inference options.
 struct Options {
     Backend backend = Backend::cpu;
-    char const* model_path = "models";
+
+    // Path to the directory where models (.onnx files) are stored.
+    char const* model_directory = "models";
 };
 
+// The environment holds common infrastructure for neural network inference, and caches loaded
+// models after they are first used. An instance of this object _must_ outlive all other object
+// which it is passed to.
+// Environment objects are safe to use from multiple threads.
 class Environment : public Handle<dlimg_Environment_> {
   public:
-    static bool is_supported(Backend);
+    // Check if the given backend is supported on the current system.
+    // Currently only looks for installed ONNX providers and does not check for supported hardware.
+    static bool is_supported(Backend) noexcept;
 
+    // Initialize common infrastrcture. Does not load any models.
     explicit Environment(Options const& = {});
 
     Environment(std::nullptr_t) noexcept;
 };
 
+//
 // Segmentation
 
+// A point in image pixel coordinates, with the origin in the top left corner.
 struct Point {
     int x = 0;
     int y = 0;
 };
 
+// A rectangular region in image pixel coordinates.
 struct Region {
     Point top_left;
     Point bottom_right;
 
-    Region() = default;
-    Region(Point top_left, Point bottom_right);
-    Region(Point origin, Extent extent);
+    constexpr Region() = default;
+    constexpr Region(Point top_left, Point bottom_right);
+    constexpr Region(Point origin, Extent extent);
 };
 
+// Stores an image embedding that has been processed for segmentation, and can be used to query
+// masks for multiple objects.
 class Segmentation : public Handle<dlimg_Segmentation_> {
   public:
+    // A binary mask for a single object in the image.
     struct Mask {
-        Image image;
-        float accuracy = 0.0f;
+        Image image;           // always uses Channels::mask with values 0 or 255
+        float accuracy = 0.0f; // confidence value
     };
 
+    // Process a color image for segmentation. This is a comparatively expensive operation.
+    // The returned object can be used to cheaply query multiple masks.
     static Segmentation process(ImageView const& img, Environment const&);
 
-    Image get_mask(Point) const;
-    void get_mask(Point, uint8_t* result_mask) const;
+    // Compute a mask from a single point in the image. If the result is ambiguous, the best mask
+    // (highest accuracy) is returned.
+    Image compute_mask(Point) const;
+    void compute_mask(Point, uint8_t* result_mask) const;
 
-    std::array<Mask, 3> get_masks(Point) const;
+    // Compute a mask from a single point in the image. Returns multiple masks with varying
+    // confidence. This can be useful when the point is ambiguous, e.g. pointing at a chimney may
+    // return masks for the chimeny, the roof, and the entire house.
+    std::array<Mask, 3> compute_masks(Point) const;
 
-    Image get_mask(Region) const;
-    void get_mask(Region, uint8_t* result_mask) const;
+    // Compute a mask for the largest object contained in the given bounding box.
+    Image compute_mask(Region) const;
+    void compute_mask(Region, uint8_t* result_mask) const;
 
-    Extent extent() const;
+    // The resolution of the input image.
+    Extent extent() const noexcept;
 
     Segmentation(std::nullptr_t) noexcept;
 };
 
-// Error handling
+//
+// API and error handling
 
+// Initialize the C API. This is called automatically when linking at compile time.
+// To load the library dynamically at runtime, define DLIMGEDIT_LOAD_DYNAMIC, resolve
+// the symbol for the dlimg_init function, and pass its result to this function.
+void initialize(dlimg_Api const* = dlimg_init());
+
+// The exception type thrown by functions in this library (unless marked noexcept).
 class Exception : public std::exception {
   public:
     explicit Exception(std::string msg) : msg_(std::move(msg)) {}
@@ -133,172 +182,6 @@ class Exception : public std::exception {
     std::string msg_;
 };
 
-//
-// Implementation
-
-inline void initialize(dlimg_Api const* api) { detail::Global<void>::api_ = api; }
-
-inline void throw_on_error(dlimg_Result result) {
-    if (result == dlimg_error) {
-        throw Exception(api().last_error());
-    }
-}
-
-// ImageView
-
-constexpr int count(Channels c) { return int(c) > 4 ? 4 : int(c); }
-
-inline ImageView::ImageView(uint8_t const* pixels, Extent extent, Channels channels)
-    : extent(extent), channels(channels), stride(extent.width * count(channels)), pixels(pixels) {}
-
-inline ImageView::ImageView(Image const& img)
-    : extent(img.extent()),
-      channels(img.channels()),
-      stride(extent.width * count(channels)),
-      pixels(img.pixels()) {}
-
-inline dlimg_ImageView const* to_api(ImageView const& i) {
-    return reinterpret_cast<dlimg_ImageView const*>(&i);
-}
-
-// Environment
-
-inline bool Environment::is_supported(Backend d) {
-    return api().is_backend_supported(dlimg_Backend(int(d))) != 0;
-}
-
-inline dlimg_Options const* to_api(Options const& o) {
-    return reinterpret_cast<dlimg_Options const*>(&o);
-}
-
-inline Environment::Environment(Options const& options) {
-    throw_on_error(api().create_environment(&emplace(), to_api(options)));
-}
-
-inline Environment::Environment(std::nullptr_t) noexcept {}
-
-// Point & Region
-
-inline bool operator==(Point a, Point b) { return a.x == b.x && a.y == b.y; }
-inline bool operator!=(Point a, Point b) { return !(a == b); }
-
-inline Region::Region(Point top_left, Point bottom_right)
-    : top_left(top_left), bottom_right(bottom_right) {}
-
-inline Region::Region(Point origin, Extent extent)
-    : top_left(origin), bottom_right(Point{origin.x + extent.width, origin.y + extent.height}) {}
-
-inline bool operator==(Region a, Region b) {
-    return a.top_left == b.top_left && a.bottom_right == b.bottom_right;
-}
-inline bool operator!=(Region a, Region b) { return !(a == b); }
-
-// Segmentation
-
-inline Segmentation::Segmentation(std::nullptr_t) noexcept {}
-
-inline Segmentation Segmentation::process(ImageView const& img, Environment const& env) {
-    auto result = Segmentation(nullptr);
-    throw_on_error(
-        api().process_image_for_segmentation(&result.emplace(), to_api(img), env.handle()));
-    return result;
-}
-
-inline void Segmentation::get_mask(Point point, uint8_t* result_mask) const {
-    auto masks = std::array<uint8_t*, 3>{result_mask, nullptr, nullptr};
-    auto ious = std::array<float, 3>{0.0f, 0.0f, 0.0f};
-    throw_on_error(
-        api().get_segmentation_mask(handle(), &point.x, nullptr, masks.data(), ious.data()));
-}
-
-inline Image Segmentation::get_mask(Point point) const {
-    auto result = Image(extent(), Channels::mask);
-    get_mask(point, result.pixels());
-    return result;
-}
-
-inline std::array<Segmentation::Mask, 3> Segmentation::get_masks(Point point) const {
-    auto result = std::array<Mask, 3>{Mask{Image(extent(), Channels::mask), 0.f},
-                                      Mask{Image(extent(), Channels::mask), 0.f},
-                                      Mask{Image(extent(), Channels::mask), 0.f}};
-    auto masks = std::array<uint8_t*, 3>{result[0].image.pixels(), result[1].image.pixels(),
-                                         result[2].image.pixels()};
-    auto ious = std::array<float, 3>{0.0f, 0.0f, 0.0f};
-    throw_on_error(
-        api().get_segmentation_mask(handle(), &point.x, nullptr, masks.data(), ious.data()));
-    result[0].accuracy = ious[0];
-    result[1].accuracy = ious[1];
-    result[2].accuracy = ious[2];
-    return result;
-}
-
-inline void Segmentation::get_mask(Region region, uint8_t* result_mask) const {
-    auto masks = std::array<uint8_t*, 3>{result_mask, nullptr, nullptr};
-    auto ious = std::array<float, 3>{0.0f, 0.0f, 0.0f};
-    throw_on_error(api().get_segmentation_mask(handle(), nullptr, &region.top_left.x, masks.data(),
-                                               ious.data()));
-}
-
-inline Image Segmentation::get_mask(Region region) const {
-    auto result = Image(extent(), Channels::mask);
-    get_mask(region, result.pixels());
-    return result;
-}
-
-inline Extent Segmentation::extent() const {
-    Extent result;
-    api().get_segmentation_extent(handle(), &result.width);
-    return result;
-}
-
-// Image
-
-inline Image::Image(Extent extent, Channels channels)
-    : extent_(extent),
-      channels_(channels),
-      pixels_(api().create_image(extent.width, extent.height, count(channels))) {}
-
-inline Image::Image(Extent extent, Channels channels, uint8_t* pixels)
-    : extent_(extent), channels_(channels), pixels_(pixels) {}
-
-inline Image::~Image() { api().destroy_image(pixels_); }
-
-inline Image::Image(Image&& other) noexcept : Image(other.extent_, other.channels_, other.pixels_) {
-    other.pixels_ = nullptr;
-}
-
-inline Image& Image::operator=(Image&& other) noexcept {
-    std::swap(extent_, other.extent_);
-    std::swap(channels_, other.channels_);
-    std::swap(pixels_, other.pixels_);
-    return *this;
-}
-
-inline Image Image::load(char const* filepath) {
-    uint8_t* pixels = nullptr;
-    Extent extent;
-    int channels = 0;
-    throw_on_error(api().load_image(filepath, &extent.width, &channels, &pixels));
-    return Image(extent, static_cast<Channels>(channels), pixels);
-}
-
-inline void Image::save(ImageView const& img, char const* filepath) {
-    throw_on_error(api().save_image(to_api(img), filepath));
-}
-
-#ifndef DLIMGEDIT_NO_FILESYSTEM
-
-inline Image Image::load(std::filesystem::path const& filepath) {
-    return load(filepath.string().c_str());
-}
-
-inline void Image::save(ImageView const& img, std::filesystem::path const& filepath) {
-    save(img, filepath.string().c_str());
-}
-
-#endif
-
-constexpr bool operator==(Extent a, Extent b) { return a.width == b.width && a.height == b.height; }
-constexpr bool operator!=(Extent a, Extent b) { return !(a == b); }
-
 } // namespace dlimg
+
+#include <dlimgedit/detail/dlimgedit.impl.hpp>

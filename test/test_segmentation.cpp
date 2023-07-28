@@ -102,15 +102,15 @@ TEST_CASE("Segmentation", "[segmentation]") {
     auto seg = Segmentation::process(img, env);
 
     SECTION("point") {
-        auto mask = seg.get_mask(Point{320, 210});
+        auto mask = seg.compute_mask(Point{320, 210});
         check_image_matches(mask, "test_segmentation_point.png");
     }
     SECTION("region") {
-        auto mask = seg.get_mask(Region{Point{180, 110}, Extent{325, 220}});
+        auto mask = seg.compute_mask(Region{Point{180, 110}, Extent{325, 220}});
         check_image_matches(mask, "test_segmentation_region.png");
     }
     SECTION("all masks") {
-        auto masks = seg.get_masks(Point{320, 210});
+        auto masks = seg.compute_masks(Point{320, 210});
         CHECK(masks[0].accuracy >= 0.95f);
         CHECK(masks[1].accuracy >= 0.95f);
         CHECK(masks[2].accuracy >= 0.95f);
@@ -124,29 +124,29 @@ TEST_CASE("Segmentation on GPU", "[segmentation]") {
     if (!Environment::is_supported(Backend::gpu)) {
         SKIP("GPU not supported");
     }
-    auto model_path = model_dir().string();
+    auto model_directory = model_dir().string();
     auto opts = Options{};
     opts.backend = Backend::gpu;
-    opts.model_path = model_path.c_str();
+    opts.model_directory = model_directory.c_str();
     auto env = Environment(opts);
     {
         auto img = Image::load(test_dir() / "input" / "cat_and_hat.png");
         auto seg = Segmentation::process(img, env);
-        auto mask = seg.get_mask(Point{320, 210});
+        auto mask = seg.compute_mask(Point{320, 210});
         check_image_matches(mask, "test_segmentation_gpu_hat.png");
     }
     {
         auto img = Image::load(test_dir() / "input" / "truck.jpg");
         auto seg = Segmentation::process(img, env);
-        auto mask = seg.get_mask(Point{486, 722});
+        auto mask = seg.compute_mask(Point{486, 722});
         check_image_matches(mask, "test_segmentation_gpu_truck.png");
     }
     {
         auto img = Image::load(test_dir() / "input" / "wardrobe.png");
         auto seg = Segmentation::process(img, env);
-        auto mask1 = seg.get_mask(Point{136, 211});
+        auto mask1 = seg.compute_mask(Point{136, 211});
         check_image_matches(mask1, "test_segmentation_gpu_wardrobe_1.png");
-        auto mask2 = seg.get_mask(Point{45, 450});
+        auto mask2 = seg.compute_mask(Point{45, 450});
         check_image_matches(mask2, "test_segmentation_gpu_wardrobe_2.png");
     }
 }

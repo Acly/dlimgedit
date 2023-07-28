@@ -32,14 +32,14 @@ Ort::Env init_onnx() {
     if (OrtGetApiBase()->GetApi(ORT_API_VERSION) == nullptr) {
         throw Exception("Could not load onnxruntime library, version mismatch");
     }
-    auto env = Ort::Env(OrtLoggingLevel::ORT_LOGGING_LEVEL_WARNING, "dlimgedit");
+    auto env = Ort::Env(OrtLoggingLevel::ORT_LOGGING_LEVEL_ERROR, "dlimgedit");
     env.DisableTelemetryEvents();
     return env;
 }
 
 EnvironmentImpl::EnvironmentImpl(Options const& opts)
     : backend(opts.backend),
-      model_path(verify_path(opts.model_path)),
+      model_directory(verify_path(opts.model_directory)),
       thread_count(std::thread::hardware_concurrency()),
       onnx_env(init_onnx()),
       memory_info(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)) {}

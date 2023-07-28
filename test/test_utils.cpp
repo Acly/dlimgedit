@@ -49,10 +49,10 @@ Path const& test_dir() {
 }
 
 Environment default_env() {
-    auto model_path = model_dir().string();
+    auto model_directory = model_dir().string();
     Options opts;
     opts.backend = Backend::cpu;
-    opts.model_path = model_path.c_str();
+    opts.model_directory = model_directory.c_str();
     return Environment(opts);
 }
 

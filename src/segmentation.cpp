@@ -122,9 +122,9 @@ void SegmentationImpl::process(ImageView const& input_image) {
     model_.image_embedder.run(input, output);
 }
 
-void SegmentationImpl::get_mask(Point const* point, Region const* region,
-                                std::span<uint8_t*, 3> result_masks,
-                                std::span<float, 3> result_accuracy) const {
+void SegmentationImpl::compute_mask(Point const* point, Region const* region,
+                                    std::span<uint8_t*, 3> result_masks,
+                                    std::span<float, 3> result_accuracy) const {
     ASSERT(point || region);
     auto image_size = TensorArray<float, 2>{};
     auto points = Tensor<float, 3>(Shape(1, 2, 2));

@@ -46,8 +46,8 @@ class SegmentationImpl {
   public:
     SegmentationImpl(EnvironmentImpl& env);
     void process(ImageView const&);
-    void get_mask(Point const*, Region const*, std::span<uint8_t*, 3> out_masks,
-                  std::span<float, 3> out_accuracies) const;
+    void compute_mask(Point const*, Region const*, std::span<uint8_t*, 3> out_masks,
+                      std::span<float, 3> out_accuracies) const;
 
     Extent extent() const { return image_size_.original; }
 

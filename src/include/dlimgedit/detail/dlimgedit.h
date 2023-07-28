@@ -36,7 +36,7 @@ typedef enum dlimg_Backend { dlimg_cpu, dlimg_gpu } dlimg_Backend;
 
 typedef struct dlimg_Options {
     dlimg_Backend backend;
-    char const* model_path;
+    char const* model_directory;
 } dlimg_Options;
 
 typedef enum dlimg_Result { dlimg_success, dlimg_error } dlimg_Result;

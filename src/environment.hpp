@@ -18,7 +18,7 @@ struct SegmentationModel;
 class EnvironmentImpl {
   public:
     Backend backend = Backend::cpu;
-    Path model_path;
+    Path model_directory;
     int thread_count = 1;
     Ort::Env onnx_env;
     Ort::MemoryInfo memory_info;
