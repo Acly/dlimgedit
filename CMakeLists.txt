@@ -31,6 +31,7 @@ install(TARGETS dlimgedit
 install(FILES ${ONNX_RUNTIME_DEPENDENCIES} DESTINATION bin)
 install(DIRECTORY src/include/ DESTINATION include)
 install(DIRECTORY models/ DESTINATION models)
+install(FILES README.md LICENSE DESTINATION .)
 
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file(
