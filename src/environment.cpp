@@ -1,4 +1,5 @@
 #include "environment.hpp"
+#include "platform.hpp"
 #include "segmentation.hpp"
 
 #include <thread>
@@ -17,20 +18,22 @@ Path EnvironmentImpl::verify_path(std::string_view path) {
 }
 
 bool EnvironmentImpl::is_supported(Backend backend) {
+    constexpr char const* cpu_provider = "CPUExecutionProvider";
+    constexpr char const* gpu_provider =
+        is_windows ? "DmlExecutionProvider" : "CUDAExecutionProvider";
+
+    auto requested = backend == Backend::gpu ? gpu_provider : cpu_provider;
     auto providers = Ort::GetAvailableProviders();
-    switch (backend) {
-    case Backend::cpu:
-        return true;
-    case Backend::gpu:
-        return std::find(providers.begin(), providers.end(), "CUDAExecutionProvider") !=
-               providers.end();
-    }
-    return false;
+    return std::find(providers.begin(), providers.end(), requested) != providers.end();
 }
 
 Ort::Env init_onnx() {
     if (OrtGetApiBase()->GetApi(ORT_API_VERSION) == nullptr) {
-        throw Exception("Could not load onnxruntime library, version mismatch");
+        if (is_windows) {
+            throw Exception("Could not load onnxruntime library, version mismatch. Make sure "
+                            "onnxruntime.dll is in the same directory as the executable.");
+        }
+        throw Exception("Could not load onnxruntime library, version mismatch.");
     }
     auto env = Ort::Env(OrtLoggingLevel::ORT_LOGGING_LEVEL_ERROR, "dlimgedit");
     env.DisableTelemetryEvents();

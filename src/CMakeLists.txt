@@ -16,8 +16,9 @@ target_include_directories(dlimgedit PUBLIC
 target_link_libraries(dlimgedit PRIVATE onnxruntime stb Eigen3::Eigen)
 
 if (MSVC)
-  target_compile_options(dlimgedit PRIVATE /W4 /WX)
+  target_compile_options(dlimgedit PRIVATE /Zi /W4 /WX)
   target_compile_options(dlimgedit PRIVATE /wd4127 /wd5054) # for Eigen
+  target_link_options(dlimgedit PRIVATE /DEBUG)
 
   foreach (file ${ONNX_RUNTIME_DEPENDENCIES})
     add_custom_command(TARGET dlimgedit POST_BUILD

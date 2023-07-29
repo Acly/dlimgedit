@@ -5,6 +5,7 @@
 #include <onnxruntime_cxx_api.h>
 
 #include <array>
+#include <mutex>
 #include <span>
 #include <type_traits>
 
@@ -48,6 +49,7 @@ class Session {
     Ort::Session session_;
     std::span<char const* const> input_names_;
     std::span<char const* const> output_names_;
+    std::mutex mutex_;
 };
 
 } // namespace dlimg
