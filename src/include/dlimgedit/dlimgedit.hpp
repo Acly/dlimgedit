@@ -17,7 +17,7 @@ namespace dlimg {
 class Image;
 
 //
-// Image
+// Image handling
 
 // Resolution of an image or size of an image region.
 struct Extent {
@@ -96,7 +96,7 @@ struct Options {
 };
 
 // The environment holds common infrastructure for neural network inference, and caches loaded
-// models after they are first used. An instance of this object _must_ outlive all other object
+// models after they are first used. An instance of this object _must_ outlive all other objects
 // which it is passed to.
 // Environment objects are safe to use from multiple threads.
 class Environment : public Handle<dlimg_Environment_> {
@@ -105,7 +105,7 @@ class Environment : public Handle<dlimg_Environment_> {
     // Currently only looks for installed ONNX providers and does not check for supported hardware.
     static bool is_supported(Backend) noexcept;
 
-    // Initialize common infrastrcture. Does not load any models.
+    // Initialize common infrastructure. Models are only loaded on demand.
     explicit Environment(Options const& = {});
 
     Environment(std::nullptr_t) noexcept;
