@@ -1,23 +1,33 @@
 include(FetchContent)
 
+if(WIN32)
+  set(OS win)
+  set(EXT zip)
+else()
+  set(OS linux)
+  set(EXT tgz)
+endif()
+set(PREFIX ${CMAKE_SHARED_LIBRARY_PREFIX})
+set(SUFFIX ${CMAKE_SHARED_LIBRARY_SUFFIX})
+
 FetchContent_Declare(
   onnxruntime
-  URL https://github.com/microsoft/onnxruntime/releases/download/v1.15.1/onnxruntime-win-x64-gpu-1.15.1.zip
+  URL https://github.com/microsoft/onnxruntime/releases/download/v1.15.1/onnxruntime-${OS}-x64-gpu-1.15.1.${EXT}
   DOWNLOAD_EXTRACT_TIMESTAMP true
 )
 FetchContent_MakeAvailable(onnxruntime)
 
 add_library(onnxruntime_providers_shared SHARED IMPORTED GLOBAL)
 set_target_properties(onnxruntime_providers_shared PROPERTIES
-  IMPORTED_LOCATION ${onnxruntime_SOURCE_DIR}/lib/onnxruntime_providers_shared.dll
+  IMPORTED_LOCATION ${onnxruntime_SOURCE_DIR}/lib/${PREFIX}onnxruntime_providers_shared${SUFFIX}
 )
 add_library(onnxruntime_providers_cuda SHARED IMPORTED GLOBAL)
 set_target_properties(onnxruntime_providers_cuda PROPERTIES
-  IMPORTED_LOCATION ${onnxruntime_SOURCE_DIR}/lib/onnxruntime_providers_cuda.dll
+  IMPORTED_LOCATION ${onnxruntime_SOURCE_DIR}/lib/${PREFIX}onnxruntime_providers_cuda${SUFFIX}
 )
 add_library(onnxruntime SHARED IMPORTED GLOBAL)
 set_target_properties(onnxruntime PROPERTIES
-  IMPORTED_LOCATION ${onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll
+  IMPORTED_LOCATION ${onnxruntime_SOURCE_DIR}/lib/${PREFIX}onnxruntime${SUFFIX}
   IMPORTED_IMPLIB ${onnxruntime_SOURCE_DIR}/lib/onnxruntime.lib
   INTERFACE_INCLUDE_DIRECTORIES ${onnxruntime_SOURCE_DIR}/include
 )
