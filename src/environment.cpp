@@ -79,17 +79,25 @@ bool has_dml_device() {
     return false;
 }
 
-bool EnvironmentImpl::is_supported(Backend backend) {
-    constexpr char const* cpu_provider = "CPUExecutionProvider";
-    constexpr char const* gpu_provider =
-        is_windows ? "DmlExecutionProvider" : "CUDAExecutionProvider";
-
-    auto requested = backend == Backend::gpu ? gpu_provider : cpu_provider;
+bool has_onnx_provider(char const* provider_name) {
     auto providers = Ort::GetAvailableProviders();
-    bool has_provider = std::find(providers.begin(), providers.end(), requested) != providers.end();
-    bool has_device =
-        backend == Backend::cpu || (is_windows ? has_dml_device() : has_cuda_device());
-    return has_provider && has_device;
+    return std::find(providers.begin(), providers.end(), provider_name) != providers.end();
+}
+
+bool is_cpu_supported() {
+    static const bool result = has_onnx_provider("CPUExecutionProvider");
+    return result;
+}
+
+bool is_gpu_supported() {
+    static const bool result =
+        is_windows ? has_onnx_provider("DmlExecutionProvider") && has_dml_device()
+                   : has_onnx_provider("CUDAExecutionProvider") && has_cuda_device();
+    return result;
+}
+
+bool EnvironmentImpl::is_supported(Backend backend) {
+    return backend == Backend::cpu ? is_cpu_supported() : is_gpu_supported();
 }
 
 Ort::Env init_onnx() {
