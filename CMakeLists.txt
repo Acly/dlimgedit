@@ -16,6 +16,7 @@ add_subdirectory(depend/fmt)
 add_subdirectory(depend/eigen)
 add_subdirectory(depend/onnx)
 add_subdirectory(depend/stb)
+add_subdirectory(depend/dylib)
 add_subdirectory(depend/catch2)
 
 add_subdirectory(src)

@@ -36,4 +36,7 @@ class EnvironmentImpl {
     Lazy<SegmentationModel> segmentation_;
 };
 
+bool has_cuda_device();
+bool has_dml_device();
+
 } // namespace dlimg

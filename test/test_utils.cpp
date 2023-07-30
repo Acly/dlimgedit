@@ -1,9 +1,11 @@
 #include "test_utils.hpp"
+#include "environment.hpp"
 #include "tensor.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/reporters/catch_reporter_event_listener.hpp>
 #include <catch2/reporters/catch_reporter_registrars.hpp>
+#include <fmt/format.h>
 
 #include <cmath>
 
@@ -14,6 +16,9 @@ class ResultCleanup : public Catch::EventListenerBase {
     using Catch::EventListenerBase::EventListenerBase;
 
     void testRunStarting(Catch::TestRunInfo const&) override {
+        fmt::print("DirectML GPU available: {}\n", has_dml_device());
+        fmt::print("CUDA GPU available: {}\n", has_cuda_device());
+
         auto results_dir = test_dir() / "result";
         if (exists(results_dir)) {
             remove_all(results_dir);

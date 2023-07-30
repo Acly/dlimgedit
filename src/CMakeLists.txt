@@ -13,7 +13,7 @@ target_include_directories(dlimgedit PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
     PRIVATE .)
-target_link_libraries(dlimgedit PRIVATE fmt onnxruntime stb Eigen3::Eigen)
+target_link_libraries(dlimgedit PRIVATE fmt onnxruntime stb Eigen3::Eigen dylib)
 
 if (MSVC)
   target_compile_options(dlimgedit PRIVATE /Zi /W4 /WX)

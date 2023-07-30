@@ -2,7 +2,12 @@
 #include "platform.hpp"
 #include "segmentation.hpp"
 
+#include <dylib.hpp>
 #include <fmt/format.h>
+#ifdef _WIN32
+#    define WIN32_LEAN_AND_MEAN
+#    include <d3d12.h>
+#endif
 
 #include <thread>
 
@@ -19,6 +24,38 @@ Path EnvironmentImpl::verify_path(std::string_view path) {
     return p;
 }
 
+// Check if a CUDA compatible GPU is available.
+bool has_cuda_device() {
+    try {
+        auto lib = dylib(is_linux ? "cuda" : "nvcuda");
+        auto cuInit = lib.get_function<int(unsigned int)>("cuInit");
+        auto cuDeviceGetCount = lib.get_function<int(int*)>("cuDeviceGetCount");
+        if (cuInit(0) != 0) {
+            return false;
+        }
+        int count = 0;
+        int result = cuDeviceGetCount(&count);
+        return result == 0 && count > 0;
+    } catch (dylib::exception const&) {
+        return false;
+    }
+}
+
+// Check if a DirectX 12 compatible GPU is available.
+bool has_dml_device() {
+#ifdef _WIN32
+    try {
+        auto lib = dylib("d3d12");
+        auto create_device = lib.get_function<decltype(D3D12CreateDevice)>("D3D12CreateDevice");
+        HRESULT result =
+            create_device(nullptr, D3D_FEATURE_LEVEL_11_0, _uuidof(ID3D12Device), nullptr);
+        return SUCCEEDED(result);
+    } catch (dylib::exception const&) {
+    }
+#endif
+    return false;
+}
+
 bool EnvironmentImpl::is_supported(Backend backend) {
     constexpr char const* cpu_provider = "CPUExecutionProvider";
     constexpr char const* gpu_provider =
@@ -26,7 +63,10 @@ bool EnvironmentImpl::is_supported(Backend backend) {
 
     auto requested = backend == Backend::gpu ? gpu_provider : cpu_provider;
     auto providers = Ort::GetAvailableProviders();
-    return std::find(providers.begin(), providers.end(), requested) != providers.end();
+    bool has_provider = std::find(providers.begin(), providers.end(), requested) != providers.end();
+    bool has_device =
+        backend == Backend::cpu || (is_windows ? has_dml_device() : has_cuda_device());
+    return has_provider && has_device;
 }
 
 Ort::Env init_onnx() {
