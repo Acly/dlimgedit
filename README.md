@@ -37,7 +37,7 @@ Performance is interactive: roughly 500ms for `Segmentation::process` and 80ms p
 
 ## Building
 
-Building only requires CMake and a compiler with C++20 support (eg. MSVC 2022 on Windows, GCC 13 on Linux).
+Building only requires CMake and a compiler with C++20 support (eg. MSVC 2022 on Windows, GCC 12 on Linux).
 
 Clone the repository:
 ```sh
@@ -66,7 +66,7 @@ See the [public header](src/include/dlimgedit/dlimgedit.hpp) for API documentati
 
 ### GPU on Windows (DirectML)
 
-Using `Backend::gpu` on Windows makes use of [DirectML](https://github.com/microsoft/DirectML) to run inference on GPU. A large range of GPUs is supported. Deploying `DirectML.dll` ([nuget](https://www.nuget.org/api/v2/package/Microsoft.AI.DirectML/1.12.0)) next to applications is recommended, otherwise the version of the DLL which ships with Windows will be used, and it is usually too old.
+Using `Backend::gpu` on Windows makes use of [DirectML](https://github.com/microsoft/DirectML) to run inference on GPU. A large range of GPUs is supported. Deploying `DirectML.dll` next to applications is recommended, otherwise the version of the DLL which ships with Windows will be used, and it is usually too old.
 
 ### GPU on Linux (CUDA)
 

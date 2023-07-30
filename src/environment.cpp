@@ -2,6 +2,8 @@
 #include "platform.hpp"
 #include "segmentation.hpp"
 
+#include <fmt/format.h>
+
 #include <thread>
 
 namespace dlimg {
@@ -9,10 +11,10 @@ namespace dlimg {
 Path EnvironmentImpl::verify_path(std::string_view path) {
     Path const p = std::filesystem::absolute(path);
     if (!exists(p)) {
-        throw Exception(std::format("Model path {} does not exist", path));
+        throw Exception(fmt::format("Model path {} does not exist", path));
     }
     if (!is_directory(p)) {
-        throw Exception(std::format("Model path {} is not a directory", path));
+        throw Exception(fmt::format("Model path {} is not a directory", path));
     }
     return p;
 }

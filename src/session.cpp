@@ -3,6 +3,7 @@
 #include "platform.hpp"
 
 #include <dml_provider_factory.h>
+#include <fmt/format.h>
 #include <onnxruntime_c_api.h>
 
 #include <memory>
@@ -60,7 +61,7 @@ Ort::Session create_session(EnvironmentImpl& env, char const* kind, char const* 
     }
     Path model_path = env.model_directory / kind / model;
     if (!exists(model_path)) {
-        throw Exception(std::format("Could not find model '{}/{}' in directory '{}'.", kind, model,
+        throw Exception(fmt::format("Could not find model '{}/{}' in directory '{}'.", kind, model,
                                     env.model_directory.string()));
     }
     return Ort::Session(env.onnx_env, model_path.c_str(), opts);

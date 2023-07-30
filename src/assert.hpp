@@ -2,8 +2,9 @@
 
 #include <dlimgedit/dlimgedit.hpp>
 
+#include <fmt/format.h>
+
 #include <cstdio>
-#include <format>
 #include <string_view>
 
 namespace dlimg {
@@ -14,7 +15,7 @@ class AssertionFailure : public Exception {
 };
 
 inline void assertion_failure(char const* file, int line, char const* expr) {
-    auto msg = std::format("Assertion failed at {}:{}: {}", file, line, expr);
+    auto msg = fmt::format("Assertion failed at {}:{}: {}", file, line, expr);
     fprintf(stderr, "%s\n", msg.c_str());
     throw AssertionFailure(msg);
 }

@@ -6,7 +6,7 @@ target_sources(test_dlimgedit PRIVATE
 )
 target_include_directories(test_dlimgedit PRIVATE ../src)
 target_link_libraries(test_dlimgedit PRIVATE
-  dlimgedit onnxruntime Eigen3::Eigen Catch2::Catch2WithMain
+  dlimgedit fmt onnxruntime Eigen3::Eigen Catch2::Catch2WithMain
 )
 
 add_test(NAME test_dlimgedit COMMAND test_dlimgedit)
