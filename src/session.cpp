@@ -2,9 +2,11 @@
 #include "environment.hpp"
 #include "platform.hpp"
 
-#include <dml_provider_factory.h>
 #include <fmt/format.h>
 #include <onnxruntime_c_api.h>
+#ifdef DLIMG_WINDOWS
+#    include <dml_provider_factory.h>
+#endif
 
 #include <memory>
 #include <optional>
@@ -46,6 +48,7 @@ Ort::Session create_session(EnvironmentImpl& env, char const* kind, char const* 
 
     if (env.backend == Backend::gpu) {
         if (is_windows) {
+#ifdef DLIMG_WINDOWS
             // Use DirectML. The following two options are required:
             opts.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
             opts.DisableMemPattern();
@@ -54,6 +57,7 @@ Ort::Session create_session(EnvironmentImpl& env, char const* kind, char const* 
             check(Ort::GetApi().GetExecutionProviderApi("DML", ORT_API_VERSION,
                                                         (void const**)(&dml_api)));
             check(dml_api->SessionOptionsAppendExecutionProvider_DML(opts_raw, 0));
+#endif
         } else if (is_linux) {
             // Use CUDA.
             opts.AppendExecutionProvider_CUDA({});

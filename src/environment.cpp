@@ -4,7 +4,7 @@
 
 #include <dylib.hpp>
 #include <fmt/format.h>
-#ifdef _WIN32
+#ifdef DLIMG_WINDOWS
 #    define WIN32_LEAN_AND_MEAN
 #    include <d3d12.h>
 #endif
@@ -43,7 +43,7 @@ bool has_cuda_device() {
 
 // Check if a DirectX 12 compatible GPU is available.
 bool has_dml_device() {
-#ifdef _WIN32
+#ifdef DLIMG_WINDOWS
     try {
         auto lib = dylib("d3d12");
         auto create_device = lib.get_function<decltype(D3D12CreateDevice)>("D3D12CreateDevice");
