@@ -31,12 +31,20 @@ bool has_cuda_device() {
         auto lib = dylib(is_linux ? "cuda" : "nvcuda");
         auto cuInit = lib.get_function<int(unsigned int)>("cuInit");
         auto cuDeviceGetCount = lib.get_function<int(int*)>("cuDeviceGetCount");
+        auto cuDeviceComputeCapability =
+            lib.get_function<int(int*, int*, int)>("cuDeviceComputeCapability");
         if (cuInit(0) != 0) {
             return false;
         }
         int count = 0;
         int result = cuDeviceGetCount(&count);
-        return result == 0 && count > 0;
+        if (result != 0 || count == 0) {
+            return false;
+        }
+        int major = 0;
+        int minor = 0;
+        result = cuDeviceComputeCapability(&major, &minor, 0);
+        return result == 0 && major >= 5; // cuDNN 8.9.3 for CUDA 11.x
     } catch (dylib::exception const&) {
         return false;
     }

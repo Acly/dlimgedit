@@ -101,8 +101,9 @@ struct Options {
 // Environment objects are safe to use from multiple threads.
 class Environment : public Handle<dlimg_Environment_> {
   public:
-    // Check if the given backend is supported on the current system.
-    // Currently only looks for installed ONNX providers and does not check for supported hardware.
+    // Check if the given backend is supported on the current system. This checks if provider
+    // libraries are installed and basic hardware requirements are met. This is a good indicator
+    // that features will work with this backend, but not a guarantee.
     static bool is_supported(Backend) noexcept;
 
     // Initialize common infrastructure. Models are only loaded on demand.
