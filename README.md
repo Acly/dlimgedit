@@ -58,7 +58,7 @@ cmake --build . --config Release
 
 ## Documentation
 
-The library can be added to existing CMake projects either via `add_subdirectory(dlimgedit/src)` to build from source, or by adding the target from installed binaries with `find_package(dlimgedit)`. Packages should work out of the box on CPU. The `onnxruntime` shared library is installed as a required runtime dependency. Execution on GPU may require further libraries at runtime, see below.
+The library can be added to existing CMake projects either via `add_subdirectory(dlimgedit)` to build from source, or by adding the target from installed binaries with `find_package(dlimgedit)`. Packages should work out of the box on CPU. The `onnxruntime` shared library is installed as a required runtime dependency. Execution on GPU may require further libraries at runtime, see below.
 
 The public API is C++14 compatible.
 
