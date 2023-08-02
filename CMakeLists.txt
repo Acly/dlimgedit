@@ -3,6 +3,8 @@ cmake_minimum_required(VERSION 3.23)
 project(dlimgedit VERSION 1.0.0 LANGUAGES CXX)
 
 option(DLIMGEDIT_TESTS "Build tests" ON)
+option(DLIMGEDIT_INSTALL_MODELS "Install models" ON)
+option(DLIMGEDIT_INSTALL_RUNTIME "Install runtime dependencies" ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -21,7 +23,7 @@ add_subdirectory(depend/catch2)
 
 add_subdirectory(src)
 
-if (DLIMGEDIT_TESTS)
+if(DLIMGEDIT_TESTS)
   enable_testing()
   add_subdirectory(test)
 endif()
@@ -31,10 +33,14 @@ install(TARGETS dlimgedit
   RUNTIME DESTINATION bin
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib)
-install(FILES ${ONNX_RUNTIME_DEPENDENCIES} DESTINATION bin)
 install(DIRECTORY src/include/ DESTINATION include)
-install(DIRECTORY models/ DESTINATION models)
 install(FILES README.md LICENSE DESTINATION .)
+if(DLIMGEDIT_INSTALL_MODELS)
+  install(DIRECTORY models/ DESTINATION models)
+endif()
+if(DLIMGEDIT_INSTALL_RUNTIME)
+  install(FILES ${ONNX_RUNTIME_DEPENDENCIES} DESTINATION bin)
+endif()
 
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file(
@@ -47,3 +53,13 @@ install(EXPORT dlimgeditTargets
   CONFIGURATIONS Release
   DESTINATION lib/cmake/dlimgedit
 )
+
+if(WIN32)
+  set(CPACK_GENERATOR "ZIP")
+  set(CPACK_PACKAGE_FILE_NAME dlimgedit-windows-x64-${PROJECT_VERSION})
+else()
+  set(CPACK_GENERATOR "TGZ")
+  set(CPACK_PACKAGE_FILE_NAME dlimgedit-linux-x64-${PROJECT_VERSION})
+endif()
+set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
+include(CPack)
