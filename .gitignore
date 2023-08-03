@@ -2,4 +2,4 @@ build
 install
 .vscode
 test/result
-script/.onnx
+*.onnx

@@ -2,11 +2,14 @@
 
 import sys
 import os
+import argparse
 
 
-def run(mobile_sam_root, output_dir):
+def run(mobile_sam_root, mobile_sam_onnx_root, output_dir):
     sys.path.append(mobile_sam_root)
-    from scripts import export_image_encoder, export_onnx_model
+    sys.path.append(mobile_sam_onnx_root)
+    from scripts import export_onnx_model
+    from mobile_sam_encoder_onnx import export_image_encoder
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -41,6 +44,24 @@ def run(mobile_sam_root, output_dir):
 
 
 if __name__ == "__main__":
-    sam_root = sys.argv[1] if len(sys.argv) > 1 else "mobile_sam"
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else ".onnx/"
-    run(sam_root, output_dir)
+    args = argparse.ArgumentParser()
+    args.add_argument(
+        "--mobile-sam",
+        type=str,
+        default="MobileSAM",
+        help="Path to MobileSAM root directory (https://github.com/ChaoningZhang/MobileSAM)",
+    )
+    args.add_argument(
+        "--mobile-sam-onnx",
+        type=str,
+        default="MobileSAM-onnx",
+        help="Path to MobileSAM-onnx root directory (https://huggingface.co/Acly/MobileSAM)",
+    )
+    args.add_argument(
+        "--output-dir",
+        type=str,
+        default=".onnx/",
+        help="Output directory for ONNX models",
+    )
+    args = args.parse_args()
+    run(args.mobile_sam, args.mobile_sam_onnx, args.output_dir)

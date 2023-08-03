@@ -23,6 +23,8 @@ add_subdirectory(depend/catch2)
 
 add_subdirectory(src)
 
+add_subdirectory(models/segmentation)
+
 if(DLIMGEDIT_TESTS)
   enable_testing()
   add_subdirectory(test)
@@ -36,7 +38,7 @@ install(TARGETS dlimgedit
 install(DIRECTORY src/include/ DESTINATION include)
 install(FILES README.md LICENSE DESTINATION .)
 if(DLIMGEDIT_INSTALL_MODELS)
-  install(DIRECTORY models/ DESTINATION models)
+  install(DIRECTORY models/ DESTINATION models FILES_MATCHING PATTERN "*.onnx")
 endif()
 if(DLIMGEDIT_INSTALL_RUNTIME)
   install(FILES ${ONNX_RUNTIME_DEPENDENCIES} DESTINATION bin)
