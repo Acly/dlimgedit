@@ -37,7 +37,7 @@ Performance is interactive: roughly 500ms for `Segmentation::process` and 80ms p
 
 ## Building
 
-Building only requires CMake and a compiler with C++20 support (eg. MSVC 2022 on Windows, GCC 12 on Linux).
+Building only requires CMake and a compiler with C++20 support (eg. MSVC 2022 on Windows, GCC 11+ on Linux).
 
 Clone the repository:
 ```sh
