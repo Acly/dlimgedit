@@ -86,6 +86,8 @@ Tensor<float, 3> create_image_tensor(ImageView const& image) {
     case Channels::argb:
         cmap = {1, 2, 3};
         break;
+    default: // rgb, rgba
+        break;
     }
     auto img = as_tensor(image);
     auto tensor = Tensor<float, 3>(Shape(image.extent, Channels::rgb));
