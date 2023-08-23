@@ -1,8 +1,12 @@
 #include "segmentation.hpp"
 #include "assert.hpp"
+#include "box.hpp"
 #include "environment.hpp"
 #include "image.hpp"
+#include "range.hpp"
 #include "tensor.hpp"
+
+#include <algorithm>
 
 namespace dlimg {
 namespace {
@@ -14,9 +18,8 @@ const auto image_input_size = 1024;
 
 const auto mask_decoder_single_model = "sam_mask_decoder_single.onnx";
 const auto mask_decoder_multi_model = "sam_mask_decoder_multi.onnx";
-const auto mask_decoder_input_names =
-    std::array{"image_embeddings", "point_coords",   "point_labels",
-               "mask_input",       "has_mask_input", "orig_im_size"};
+const auto mask_decoder_input_names = std::array{"image_embeddings", "point_coords", "point_labels",
+    "mask_input", "has_mask_input", "orig_im_size"};
 const auto mask_decoder_output_names = std::array{"masks", "iou_predictions", "low_res_masks"};
 
 int scale_coord(int coord, float scale) { return int(coord * scale + 0.5f); }
@@ -25,7 +28,7 @@ int scale_coord(int coord, float scale) { return int(coord * scale + 0.5f); }
 
 SegmentationModel::SegmentationModel(EnvironmentImpl& env)
     : image_embedder(env, "segmentation", image_embedder_model, image_embedder_input_names,
-                     image_embedder_output_names),
+          image_embedder_output_names),
       env_(env) {
 
     auto image_shape = image_embedder.input_shape(0);
@@ -43,12 +46,12 @@ SegmentationModel::SegmentationModel(EnvironmentImpl& env)
 
 Session& SegmentationModel::single_mask_decoder() {
     return single_mask_decoder_.get_or_create(env_, "segmentation", mask_decoder_single_model,
-                                              mask_decoder_input_names, mask_decoder_output_names);
+        mask_decoder_input_names, mask_decoder_output_names);
 }
 
 Session& SegmentationModel::multi_mask_decoder() {
     return multi_mask_decoder_.get_or_create(env_, "segmentation", mask_decoder_multi_model,
-                                             mask_decoder_input_names, mask_decoder_output_names);
+        mask_decoder_input_names, mask_decoder_output_names);
 }
 
 ResizeLongestSide::ResizeLongestSide(int max_side) : max_side_(max_side) {}
@@ -101,14 +104,20 @@ Tensor<float, 3> create_image_tensor(ImageView const& image) {
     return tensor;
 }
 
-void write_mask_image(TensorMap<float const, 4> const& tensor, int index, Extent const& extent,
-                      uint8_t* out_mask) {
+float write_mask_image(
+    TensorMap<float const, 4> const& tensor, int index, Extent const& extent, uint8_t* out_mask) {
     auto mask = TensorMap<uint8_t, 3>(out_mask, Shape(extent, Channels::mask));
+    int64_t sum_low = 0;
+    int64_t sum_high = 0;
     for (int i = 0; i < mask.dimension(0); ++i) {
         for (int j = 0; j < mask.dimension(1); ++j) {
-            mask(i, j, 0) = uint8_t(tensor(0, index, i, j) > 0 ? 255 : 0);
+            float v = tensor(0, index, i, j);
+            sum_low += v > -1.f ? 1 : 0;
+            sum_high += v > 1.f ? 1 : 0;
+            mask(i, j, 0) = uint8_t(v > 0 ? 255 : 0);
         }
     }
+    return float(sum_high) / float(sum_low); // stability score
 }
 
 SegmentationImpl::SegmentationImpl(EnvironmentImpl& env)
@@ -125,8 +134,8 @@ void SegmentationImpl::process(ImageView const& input_image) {
 }
 
 void SegmentationImpl::compute_mask(Point const* point, Region const* region,
-                                    std::span<uint8_t*, 3> result_masks,
-                                    std::span<float, 3> result_accuracy) const {
+    std::span<uint8_t*, 3> result_masks, std::span<float, 3> result_accuracy,
+    std::span<float, 3> result_stability) const {
     ASSERT(point || region);
     auto image_size = TensorArray<float, 2>{};
     auto points = Tensor<float, 3>(Shape(1, 2, 2));
@@ -150,8 +159,8 @@ void SegmentationImpl::compute_mask(Point const* point, Region const* region,
     bool is_single_mask = result_masks[1] == nullptr;
     auto& mask_decoder =
         is_single_mask ? model_.single_mask_decoder() : model_.multi_mask_decoder();
-    auto output = mask_decoder(image_embedding_, points, labels, model_.input_mask, model_.has_mask,
-                               image_size);
+    auto output = mask_decoder(
+        image_embedding_, points, labels, model_.input_mask, model_.has_mask, image_size);
     auto masks = as_tensor<float const, 4>(output[0]);
     auto iou_predictions = as_tensor<float const, 2>(output[1]);
 
@@ -163,10 +172,72 @@ void SegmentationImpl::compute_mask(Point const* point, Region const* region,
         ASSERT(masks.dimension(1) == 4);
         for (int i = 0; i < 3; ++i) {
             ASSERT(result_masks[i] != nullptr);
-            write_mask_image(masks, i + 1, image_size_.original, result_masks[i]);
+            result_stability[i] =
+                write_mask_image(masks, i + 1, image_size_.original, result_masks[i]);
             result_accuracy[i] = iou_predictions(0, i + 1);
         }
     }
+}
+
+struct LocalMaskImpl {
+    Image image;
+    AlignedBox2i box;
+    float iou = 0;
+};
+
+std::vector<LocalMask> non_maximum_suppression(std::vector<LocalMaskImpl>& masks, float threshold) {
+    auto indices = to_vector(std::views::iota(0, int(masks.size())));
+    ranges::sort(indices, [&](int a, int b) { return masks[a].iou > masks[b].iou; }); // descending
+    std::vector<LocalMask> result;
+    while (!indices.empty()) {
+        int i = indices.back();
+        indices.pop_back();
+        result.push_back(
+            LocalMask{std::move(masks[i].image), to_region(masks[i].box), masks[i].iou});
+        std::erase_if(indices,
+            [&](int j) { return intersection_over_union(masks[i].box, masks[j].box) > threshold; });
+    }
+    return result;
+}
+
+std::vector<LocalMask> segment_image(SegmentationImpl const& seg, int point_count) {
+    const float mask_iou_threshold = 0.88f;
+    const float box_nms_threshold = 0.7f;
+    const float stability_score_threshold = 0.95f;
+
+    auto extent = to_array(seg.extent());
+    float longest = float(extent.maxCoeff());
+    Array2i point_counts = (Array2f(point_count) * (extent.cast<float>() / longest)).cast<int>();
+
+    std::vector<LocalMaskImpl> masks;
+    masks.reserve(point_counts.prod());
+
+    auto temp_masks = generate_array<3>([&]() { return Image(seg.extent(), Channels::mask); });
+    auto temp_pixels =
+        to_array<3>(views::transform(temp_masks, [&](Image& img) { return img.pixels(); }));
+
+    for (int i = 0; i < point_counts.x(); ++i) {
+        for (int j = 0; j < point_counts.y(); ++j) {
+            Array2f pointf =
+                Array2f(i + 0.5f, j + 0.5f) * (extent.cast<float>() / point_counts.cast<float>());
+            Point point = to_point(pointf.cast<int>());
+            auto iou = std::array<float, 3>{};
+            auto stability = std::array<float, 3>{};
+            seg.compute_mask(&point, nullptr, temp_pixels, iou, stability);
+
+            auto mask_indices = views::iota(0, 3);
+            auto filtered = mask_indices | views::filter([&](int k) {
+                return iou[k] > mask_iou_threshold && stability[k] > stability_score_threshold;
+            });
+            auto cropped = filtered | views::transform([&](int k) {
+                auto&& [cropped, box] = crop_to_bounding_box(std::move(temp_masks[k]));
+                return LocalMaskImpl{std::move(cropped), box, iou[k]};
+            });
+            ranges::copy(cropped, std::back_inserter(masks));
+        }
+    }
+    auto results = non_maximum_suppression(masks, box_nms_threshold);
+    return results;
 }
 
 } // namespace dlimg

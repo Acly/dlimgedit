@@ -57,11 +57,23 @@ class Shape {
         return std::accumulate(a_.begin(), a_.begin() + rank_, int64_t(1), std::multiplies<>());
     }
 
-    template <size_t N> operator std::array<Eigen::DenseIndex, N>() const {
+    template <size_t N> std::array<int64_t, N> take() const {
         ASSERT(rank_ == N);
         auto res = std::array<Eigen::DenseIndex, N>{};
         std::copy(a_.begin(), a_.begin() + N, res.begin());
         return res;
+    }
+
+    template <size_t N> operator std::array<Eigen::DenseIndex, N>() const { return take<N>(); }
+
+    Extent extent() const {
+        ASSERT(rank_ == 3);
+        return Extent{int(a_[1]), int(a_[0])};
+    }
+
+    Channels channels() const {
+        ASSERT(rank_ == 3);
+        return Channels(a_[2]);
     }
 
   private:
@@ -87,5 +99,7 @@ template <typename T, int64_t Rank> TensorMap<T, Rank> as_tensor(Ort::Value& val
 
 TensorMap<uint8_t, 3> as_tensor(Image&);
 TensorMap<uint8_t const, 3> as_tensor(ImageView);
+
+Image copy_to_image(TensorMap<uint8_t const, 3> const&);
 
 } // namespace dlimg

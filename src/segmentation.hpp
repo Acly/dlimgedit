@@ -47,7 +47,8 @@ class SegmentationImpl {
     SegmentationImpl(EnvironmentImpl& env);
     void process(ImageView const&);
     void compute_mask(Point const*, Region const*, std::span<uint8_t*, 3> out_masks,
-                      std::span<float, 3> out_accuracies) const;
+                      std::span<float, 3> out_accuracy, std::span<float, 3> out_stability) const;
+    // Segmentation::Mask compute_mask(Point const&) const;
 
     Extent extent() const { return image_size_.original; }
 
@@ -61,7 +62,15 @@ class SegmentationImpl {
 
 Tensor<float, 3> create_image_tensor(ImageView const&);
 
-void write_mask_image(TensorMap<float const, 4> const&, int index, Extent const&,
-                      uint8_t* out_mask);
+float write_mask_image(TensorMap<float const, 4> const&, int index, Extent const&,
+                       uint8_t* out_mask);
+
+struct LocalMask {
+    Image image;
+    Region region;
+    float accuracy = 0;
+};
+
+std::vector<LocalMask> segment_image(SegmentationImpl const& seg, int point_count);
 
 } // namespace dlimg

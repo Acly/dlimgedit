@@ -151,4 +151,36 @@ TEST_CASE("Segmentation on GPU", "[segmentation]") {
     }
 }
 
+TEST_CASE("Two Environments", "[segmentation]") {
+    if (!Environment::is_supported(Backend::gpu)) {
+        SKIP("GPU not supported");
+    }
+    auto env_cpu = Environment(nullptr);
+    auto env_gpu = Environment(nullptr);
+    for (auto backend : {Backend::cpu, Backend::gpu}) {
+        auto model_directory = model_dir().string();
+        auto opts = Options{};
+        opts.backend = backend;
+        opts.model_directory = model_directory.c_str();
+        auto env = Environment(opts);
+        auto img = Image::load(test_dir() / "input" / "cat_and_hat.png");
+        Segmentation::process(img, env);
+    }
+}
+
+TEST_CASE("Segment Image", "[segmentation]") {
+    auto env = default_env();
+    auto img = Image::load(test_dir() / "input" / "wardrobe.png");
+    auto seg = Segmentation::process(img, env);
+    auto masks = segment_image(*reinterpret_cast<SegmentationImpl*>(seg.handle()), 32);
+    int i = 0;
+    for (auto& mask : masks) {
+        fmt::print("region: ({}, {}), ({}, {})\n", mask.region.top_left.x, mask.region.top_left.y,
+            mask.region.bottom_right.x, mask.region.bottom_right.y);
+        Image::save(
+            mask.image, test_dir() / "result" / fmt::format("test_segmentation_all_{}.png", i));
+        ++i;
+    }
+}
+
 } // namespace dlimg

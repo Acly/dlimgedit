@@ -49,8 +49,9 @@ dlimg_Result create_environment(dlimg_Environment* handle, dlimg_Options const* 
 
 void destroy_environment(dlimg_Environment handle) { delete &to_impl(handle); }
 
-dlimg_Result process_image_for_segmentation(dlimg_Segmentation* handle, dlimg_ImageView const* img,
-                                            dlimg_Environment env) {
+dlimg_Result process_image_for_segmentation(
+    dlimg_Segmentation* handle, dlimg_ImageView const* img, dlimg_Environment env) {
+
     return try_([=] {
         auto seg = new SegmentationImpl(to_impl(env));
         *handle = to_handle(seg);
@@ -59,11 +60,13 @@ dlimg_Result process_image_for_segmentation(dlimg_Segmentation* handle, dlimg_Im
 }
 
 dlimg_Result get_segmentation_mask(dlimg_Segmentation handle, int const* point, int const* region,
-                                   uint8_t** result_masks, float* result_accuracy) {
+    uint8_t** result_masks, float* result_accuracy) {
+
     return try_([=] {
-        to_impl(handle).compute_mask(
-            reinterpret_cast<Point const*>(point), reinterpret_cast<Region const*>(region),
-            std::span<uint8_t*, 3>(result_masks, 3), std::span<float, 3>(result_accuracy, 3));
+        std::array<float, 3> stability{};
+        to_impl(handle).compute_mask(reinterpret_cast<Point const*>(point),
+            reinterpret_cast<Region const*>(region), std::span<uint8_t*, 3>(result_masks, 3),
+            std::span<float, 3>(result_accuracy, 3), stability);
     });
 }
 
@@ -74,8 +77,8 @@ void get_segmentation_extent(dlimg_Segmentation handle, int* out_extent) {
 
 void destroy_segmentation(dlimg_Segmentation handle) { delete &to_impl(handle); }
 
-dlimg_Result load_image_api(char const* filepath, int* out_extent, int* out_channels,
-                            uint8_t** out_pixels) {
+dlimg_Result load_image_api(
+    char const* filepath, int* out_extent, int* out_channels, uint8_t** out_pixels) {
     return try_([=] {
         *out_pixels = load_image(filepath, reinterpret_cast<Extent*>(out_extent), out_channels);
     });
