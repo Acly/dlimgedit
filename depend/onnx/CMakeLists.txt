@@ -7,12 +7,12 @@ if(WIN32)
   FetchContent_Declare(
       directml
       DOWNLOAD_EXTRACT_TIMESTAMP true
-      URL https://www.nuget.org/api/v2/package/Microsoft.AI.DirectML/1.12.0
+      URL https://www.nuget.org/api/v2/package/Microsoft.AI.DirectML/1.15.4
   )
   FetchContent_Declare(
     onnxruntime
     DOWNLOAD_EXTRACT_TIMESTAMP true
-    URL https://github.com/microsoft/onnxruntime/releases/download/v1.15.1/Microsoft.ML.OnnxRuntime.DirectML.1.15.1.zip
+    URL https://github.com/microsoft/onnxruntime/releases/download/v1.20.0/Microsoft.ML.OnnxRuntime.DirectML.1.20.0.nupkg
   )
   FetchContent_MakeAvailable(directml onnxruntime)
 
@@ -39,7 +39,7 @@ else() # Linux
   FetchContent_Declare(
     onnxruntime
     DOWNLOAD_EXTRACT_TIMESTAMP true
-    URL https://github.com/microsoft/onnxruntime/releases/download/v1.15.1/onnxruntime-linux-x64-gpu-1.15.1.tgz
+    URL https://github.com/microsoft/onnxruntime/releases/download/v1.20.1/onnxruntime-linux-x64-gpu-1.20.1.tgz
   )
   FetchContent_MakeAvailable(onnxruntime)
 
