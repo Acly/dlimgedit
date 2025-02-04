@@ -74,6 +74,11 @@ void get_segmentation_extent(dlimg_Segmentation handle, int* out_extent) {
 
 void destroy_segmentation(dlimg_Segmentation handle) { delete &to_impl(handle); }
 
+dlimg_Result segment_objects(dlimg_ImageView const* img, int const*, uint8_t* out_mask,
+                             dlimg_Environment env) {
+    return try_([=] { BiRefNet::segment(to_impl(env), to_impl(img), out_mask); });
+}
+
 dlimg_Result load_image_api(char const* filepath, int* out_extent, int* out_channels,
                             uint8_t** out_pixels) {
     return try_([=] {
@@ -103,6 +108,7 @@ dlimg_Api const* dlimg_init() {
     dlimg::api_.get_segmentation_mask = dlimg::get_segmentation_mask;
     dlimg::api_.get_segmentation_extent = dlimg::get_segmentation_extent;
     dlimg::api_.destroy_segmentation = dlimg::destroy_segmentation;
+    dlimg::api_.segment_objects = dlimg::segment_objects;
     dlimg::api_.load_image = dlimg::load_image_api;
     dlimg::api_.save_image = dlimg::save_image_api;
     dlimg::api_.create_image = dlimg::create_image;

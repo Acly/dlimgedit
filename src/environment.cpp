@@ -128,7 +128,11 @@ EnvironmentImpl::EnvironmentImpl(Options const& opts)
       onnx_env(init_onnx()),
       memory_info(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)) {}
 
-SegmentationModel& EnvironmentImpl::segmentation() { return segmentation_.get_or_create(*this); }
+SegmentAnythingModel& EnvironmentImpl::segment_anything_model() {
+    return segment_anything_.get_or_create(*this);
+}
+
+BiRefNetModel& EnvironmentImpl::birefnet_model() { return birefnet_.get_or_create(*this); }
 
 EnvironmentImpl::~EnvironmentImpl() = default;
 

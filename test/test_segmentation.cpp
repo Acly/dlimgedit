@@ -2,6 +2,7 @@
 #include "segmentation.hpp"
 #include "test_utils.hpp"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <dlimgedit/dlimgedit.hpp>
@@ -9,8 +10,9 @@
 #include <numeric>
 
 namespace dlimg {
+using Catch::Approx;
 
-TEST_CASE("Resize longest side", "[segmentation]") {
+TEST_CASE("Resize longest side", "[sam]") {
     SECTION("height") {
         auto img = Image(Extent{13, 19}, Channels::rgba);
         SECTION("upscale") {
@@ -43,7 +45,7 @@ TEST_CASE("Resize longest side", "[segmentation]") {
     }
 }
 
-TEST_CASE("Resize and transform", "[segmentation]") {
+TEST_CASE("Resize and transform", "[sam]") {
     auto img = Image(Extent{10, 10}, Channels::rgba);
     auto img_size = ResizeLongestSide(20);
     auto resized = img_size.resize(img);
@@ -54,7 +56,7 @@ TEST_CASE("Resize and transform", "[segmentation]") {
     CHECK(img_size.transform(Point{2, 7}) == Point{4, 14});
 }
 
-TEST_CASE("Image to tensor", "[segmentation]") {
+TEST_CASE("Image to tensor", "[sam]") {
     auto channels = GENERATE(Channels::rgb, Channels::rgba, Channels::bgra, Channels::argb);
     auto img = Image(Extent{8, 6}, channels);
     std::iota(img.pixels(), img.pixels() + img.size(), 0);
@@ -80,7 +82,7 @@ TEST_CASE("Image to tensor", "[segmentation]") {
     CHECK(tensor(1, 0, 0) == expected[5]);
 }
 
-TEST_CASE("Tensor to mask", "[segmentation]") {
+TEST_CASE("Tensor to mask", "[sam]") {
     auto tensor_values = std::array{0.0f, 0.0f, 0.2f, -3.1f, 0.0f, 5.5f, 0.0f, 0.7f, 0.0f, 0.9f};
     auto tensor = TensorMap<float const, 4>(tensor_values.data(), Shape(1, 1, 2, 5));
     auto mask = Image(Extent{4, 2}, Channels::mask);
@@ -96,8 +98,8 @@ TEST_CASE("Tensor to mask", "[segmentation]") {
     CHECK(result(1, 3, 0) == 0);
 }
 
-TEST_CASE("Segmentation", "[segmentation]") {
-    auto env = default_env();
+TEST_CASE("Segmentation", "[sam]") {
+    auto env = make_env(Backend::cpu);
     auto img = Image::load(test_dir() / "input" / "cat_and_hat.png");
     auto seg = Segmentation::process(img, env);
 
@@ -120,15 +122,11 @@ TEST_CASE("Segmentation", "[segmentation]") {
     }
 }
 
-TEST_CASE("Segmentation on GPU", "[segmentation]") {
+TEST_CASE("Segmentation on GPU", "[sam]") {
     if (!Environment::is_supported(Backend::gpu)) {
         SKIP("GPU not supported");
     }
-    auto model_directory = model_dir().string();
-    auto opts = Options{};
-    opts.backend = Backend::gpu;
-    opts.model_directory = model_directory.c_str();
-    auto env = Environment(opts);
+    auto env = make_env(Backend::gpu);
     {
         auto img = Image::load(test_dir() / "input" / "cat_and_hat.png");
         auto seg = Segmentation::process(img, env);
@@ -150,5 +148,49 @@ TEST_CASE("Segmentation on GPU", "[segmentation]") {
         check_image_matches(mask2, "test_segmentation_gpu_wardrobe_2.png");
     }
 }
+
+TEST_CASE("Prepare image", "[birefnet]") {
+    auto img = Image(Extent{4, 3}, Channels::rgba);
+    std::iota(img.pixels(), img.pixels() + img.size(), 0);
+
+    using Eigen::Array3f;
+    const Array3f mean{0.4f, 0.5f, 0.6f};
+    const Array3f std{0.1f, 0.2f, 0.5f};
+    auto tensor = BiRefNet::prepare_image(as_tensor(img), mean, std);
+
+    CHECK(tensor(0, 0, 0, 0) == Approx(-4.0f));
+    CHECK(tensor(0, 0, 0, 1) == Approx(((4.0f / 255.0f) - 0.4f) / 0.1f));
+    CHECK(tensor(0, 0, 0, 2) == Approx(((8.0f / 255.0f) - 0.4f) / 0.1f));
+    CHECK(tensor(0, 0, 1, 0) == Approx(((16.0f / 255.0f) - 0.4f) / 0.1f));
+    CHECK(tensor(0, 0, 1, 1) == Approx(((20.0f / 255.0f) - 0.4f) / 0.1f));
+    CHECK(tensor(0, 1, 1, 1) == Approx(((21.0f / 255.0f) - 0.5f) / 0.2f));
+    CHECK(tensor(0, 2, 1, 1) == Approx(((22.0f / 255.0f) - 0.6f) / 0.5f));
+}
+
+TEST_CASE("Process mask", "[birefnet]") {
+    auto tensor_values = std::array{0.0f, 0.0f, 0.2f, -3.1f, 0.0f, 5.5f, 0.0f, 0.7f, 0.0f, 0.9f};
+    auto tensor = TensorMap<float const, 4>(tensor_values.data(), Shape(1, 1, 2, 5));
+    auto mask = BiRefNet::process_mask(tensor);
+    CHECK(mask(0, 0) == uint8_t(sigmoid(0) * 255));
+    CHECK(mask(0, 1) == uint8_t(sigmoid(0) * 255));
+    CHECK(mask(0, 2) == uint8_t(sigmoid(0.2f) * 255));
+    CHECK(mask(0, 3) == uint8_t(sigmoid(-3.1f) * 255));
+    CHECK(mask(1, 0) == uint8_t(sigmoid(5.5f) * 255));
+    CHECK(mask(1, 2) == uint8_t(sigmoid(0.7f) * 255));
+}
+
+TEST_CASE("Segmentation", "[birefnet]") {
+    auto env = default_env();
+    auto img = Image::load(test_dir() / "input" / "truck.jpg");
+    auto seg = segment_objects(img, Region(), env);
+    Image::save(seg, test_dir() / "result" / "test_birefnet_truck.png");
+}
+
+// TEST_CASE("Segmentation with Region", "[birefnet]") {
+//     auto env = default_env();
+//     auto img = Image::load(test_dir() / "input" / "cat_and_hat.png");
+//     auto seg = segment_objects(img, Region{Point{180, 110}, Extent{325, 220}}, env);
+//     Image::save(seg, test_dir() / "result" / "test_birefnet_hat.png");
+// }
 
 } // namespace dlimg

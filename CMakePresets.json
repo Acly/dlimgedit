@@ -31,7 +31,7 @@
   "buildPresets": [
     {
       "name": "default",
-      "configurePreset": "default"
+      "configurePreset": "release"
     }
   ]
 }

@@ -1,5 +1,7 @@
 build
 install
 .vscode
+.debug
 test/result
 *.onnx
+*.pt

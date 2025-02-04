@@ -165,6 +165,11 @@ class Segmentation : public Handle<dlimg_Segmentation_> {
     Segmentation(std::nullptr_t) noexcept;
 };
 
+// Returns a mask which segments foreground objects found in the image (dichotomous segmentation).
+// The region argument is optional and will restrict the segmentation to the given bounding box.
+Image segment_objects(ImageView const& img, Region region, Environment const&);
+void segment_objects(ImageView const& img, Region region, uint8_t* out_mask, Environment const&);
+
 //
 // API and error handling
 

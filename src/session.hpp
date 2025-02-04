@@ -7,6 +7,7 @@
 #include <array>
 #include <mutex>
 #include <span>
+#include <string>
 #include <type_traits>
 
 namespace dlimg {
@@ -33,6 +34,8 @@ class Session {
     Session(EnvironmentImpl& env, char const* model_kind, char const* model_name,
             std::span<char const* const> input_names, std::span<char const* const> output_names);
 
+    Session(EnvironmentImpl& env, char const* model_kind, char const* model_name);
+
     Shape input_shape(int index) const;
     Shape output_shape(int index) const;
 
@@ -47,8 +50,9 @@ class Session {
   private:
     EnvironmentImpl& env_;
     Ort::Session session_;
-    std::span<char const* const> input_names_;
-    std::span<char const* const> output_names_;
+    std::vector<Ort::AllocatedStringPtr> names_;
+    std::vector<char const*> input_names_;
+    std::vector<char const*> output_names_;
     std::mutex mutex_;
 };
 

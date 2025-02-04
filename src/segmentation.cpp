@@ -5,6 +5,10 @@
 #include "tensor.hpp"
 
 namespace dlimg {
+
+//
+// SegmentAnythingModel (SAM)
+
 namespace {
 
 const auto image_embedder_model = "mobile_sam_image_encoder.onnx";
@@ -23,7 +27,7 @@ int scale_coord(int coord, float scale) { return int(coord * scale + 0.5f); }
 
 } // namespace
 
-SegmentationModel::SegmentationModel(EnvironmentImpl& env)
+SegmentAnythingModel::SegmentAnythingModel(EnvironmentImpl& env)
     : image_embedder(env, "segmentation", image_embedder_model, image_embedder_input_names,
                      image_embedder_output_names),
       env_(env) {
@@ -41,12 +45,12 @@ SegmentationModel::SegmentationModel(EnvironmentImpl& env)
     has_mask.setZero();
 }
 
-Session& SegmentationModel::single_mask_decoder() {
+Session& SegmentAnythingModel::single_mask_decoder() {
     return single_mask_decoder_.get_or_create(env_, "segmentation", mask_decoder_single_model,
                                               mask_decoder_input_names, mask_decoder_output_names);
 }
 
-Session& SegmentationModel::multi_mask_decoder() {
+Session& SegmentAnythingModel::multi_mask_decoder() {
     return multi_mask_decoder_.get_or_create(env_, "segmentation", mask_decoder_multi_model,
                                              mask_decoder_input_names, mask_decoder_output_names);
 }
@@ -112,7 +116,7 @@ void write_mask_image(TensorMap<float const, 4> const& tensor, int index, Extent
 }
 
 SegmentationImpl::SegmentationImpl(EnvironmentImpl& env)
-    : env_(env), model_(env.segmentation()), image_size_(image_input_size) {}
+    : env_(env), model_(env.segment_anything_model()), image_size_(image_input_size) {}
 
 void SegmentationImpl::process(ImageView const& input_image) {
     auto resized_image = image_size_.resize(input_image);
@@ -167,6 +171,66 @@ void SegmentationImpl::compute_mask(Point const* point, Region const* region,
             result_accuracy[i] = iou_predictions(0, i + 1);
         }
     }
+}
+
+//
+// BiRefNet Model
+
+BiRefNetModel::BiRefNetModel(EnvironmentImpl& env)
+    : session(env, "segmentation", "birefnet_lite.onnx"), input_shape(session.input_shape(0)) {
+    ASSERT(input_shape.rank() == 4);
+    ASSERT(input_shape[1] == 3);
+    ASSERT(session.output_shape(0).rank() == 4);
+}
+
+void BiRefNet::segment(EnvironmentImpl& env, ImageView const& input_image, uint8_t* out_mask) {
+    auto& birefnet = env.birefnet_model();
+    auto input_shape = birefnet.input_shape;
+
+    auto model_resolution = Extent(int(input_shape[3]), int(input_shape[2]));
+    auto resized_image = resize(input_image, model_resolution);
+
+    const Array3f mean{0.485f, 0.456f, 0.406f};
+    const Array3f std{0.229f, 0.224f, 0.225f};
+    auto image_tensor = prepare_image(as_tensor(resized_image), mean, std);
+
+    auto output = birefnet.session(image_tensor);
+
+    auto mask_float = as_tensor<float const, 4>(output[0]);
+    auto mask_uint8 = process_mask(mask_float);
+    auto mask_img = ImageView(mask_uint8.data(), model_resolution, Channels::mask);
+    resize_mask(mask_img, input_image.extent, out_mask);
+}
+
+Tensor<float, 4> BiRefNet::prepare_image(TensorMap<uint8_t, 3> const& img, Array3f mean,
+                                         Array3f std) {
+    auto width = img.dimension(0);
+    auto height = img.dimension(1);
+
+    auto image_tensor = Tensor<float, 4>(Shape{1, 3, height, width});
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            for (int c = 0; c < 3; ++c) {
+                float value = float(img(y, x, c)) / 255.f;
+                image_tensor(0, c, y, x) = (value - mean[c]) / std[c];
+            }
+        }
+    }
+    return image_tensor;
+}
+
+Tensor<uint8_t, 2> BiRefNet::process_mask(TensorMap<float const, 4> const& mask) {
+    auto width = mask.dimension(3);
+    auto height = mask.dimension(2);
+
+    auto output = Tensor<uint8_t, 2>(Shape{height, width});
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            float value = sigmoid(mask(0, 0, y, x));
+            output(y, x) = uint8_t(value * 255.f);
+        }
+    }
+    return output;
 }
 
 } // namespace dlimg

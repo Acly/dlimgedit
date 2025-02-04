@@ -8,6 +8,7 @@
 #    include <dml_provider_factory.h>
 #endif
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <string>
@@ -37,6 +38,18 @@ std::optional<std::unique_lock<std::mutex>> lock_session(std::mutex& m,
         return std::unique_lock<std::mutex>(m);
     }
     return {};
+}
+
+std::vector<Ort::AllocatedStringPtr> get_argument_names(Ort::Session const& session) {
+    Ort::AllocatorWithDefaultOptions allocator;
+    std::vector<Ort::AllocatedStringPtr> result;
+    for (size_t i = 0; i < session.GetInputCount(); ++i) {
+        result.push_back(session.GetInputNameAllocated(i, allocator));
+    }
+    for (size_t i = 0; i < session.GetOutputCount(); ++i) {
+        result.push_back(session.GetOutputNameAllocated(i, allocator));
+    }
+    return result;
 }
 
 } // namespace
@@ -76,10 +89,23 @@ Session::Session(EnvironmentImpl& env, char const* model_kind, char const* model
                  std::span<char const* const> output_names)
     : env_(env),
       session_(create_session(env, model_kind, model_name)),
-      input_names_(input_names),
-      output_names_(output_names) {
+      input_names_(input_names.begin(), input_names.end()),
+      output_names_(output_names.begin(), output_names.end()) {
+
     ASSERT(input_names.size() == session_.GetInputCount());
     ASSERT(output_names.size() == session_.GetOutputCount());
+}
+
+Session::Session(EnvironmentImpl& env, char const* model_kind, char const* model_name)
+    : env_(env),
+      session_(create_session(env, model_kind, model_name)),
+      names_(get_argument_names(session_)),
+      input_names_(session_.GetInputCount()),
+      output_names_(session_.GetOutputCount()) {
+
+    auto str_ptr = [](Ort::AllocatedStringPtr const& ptr) { return ptr.get(); };
+    transform(names_.begin(), names_.begin() + input_names_.size(), input_names_.begin(), str_ptr);
+    transform(names_.begin() + input_names_.size(), names_.end(), output_names_.begin(), str_ptr);
 }
 
 Shape Session::input_shape(int index) const {
