@@ -55,6 +55,9 @@ struct dlimg_Api {
     void (*get_segmentation_extent)(dlimg_Segmentation, int* /*out_extent*/);
     void (*destroy_segmentation)(dlimg_Segmentation);
 
+    dlimg_Result (*segment_objects)(dlimg_ImageView const*, int const* /*region*/,
+                                    uint8_t* /*out_mask*/, dlimg_Environment);
+
     dlimg_Result (*load_image)(char const*, int* /*out_extent*/, int* /*out_channels*/,
                                uint8_t** /*out_pixels*/);
     dlimg_Result (*save_image)(dlimg_ImageView const*, char const*);

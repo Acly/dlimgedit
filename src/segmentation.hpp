@@ -6,13 +6,15 @@
 #include "tensor.hpp"
 #include <dlimgedit/dlimgedit.hpp>
 
+#include <cmath>
 #include <optional>
 #include <span>
 
 namespace dlimg {
 class EnvironmentImpl;
+using Eigen::Array3f;
 
-struct SegmentationModel {
+struct SegmentAnythingModel {
     Session image_embedder;
     Shape image_embedding_shape;
 
@@ -21,7 +23,7 @@ struct SegmentationModel {
     Tensor<float, 4> input_mask;    // always zero
     TensorArray<float, 1> has_mask; // always zero
 
-    explicit SegmentationModel(EnvironmentImpl&);
+    explicit SegmentAnythingModel(EnvironmentImpl&);
 
   private:
     EnvironmentImpl& env_;
@@ -53,7 +55,7 @@ class SegmentationImpl {
 
   private:
     EnvironmentImpl const& env_;
-    SegmentationModel& model_;
+    SegmentAnythingModel& model_;
 
     ResizeLongestSide image_size_;
     Tensor<float, 4> image_embedding_;
@@ -63,5 +65,22 @@ Tensor<float, 3> create_image_tensor(ImageView const&);
 
 void write_mask_image(TensorMap<float const, 4> const&, int index, Extent const&,
                       uint8_t* out_mask);
+
+struct BiRefNetModel {
+    Session session;
+    Shape input_shape;
+
+    explicit BiRefNetModel(EnvironmentImpl&);
+};
+
+struct BiRefNet {
+    static void segment(EnvironmentImpl&, ImageView const&, uint8_t* out_mask);
+
+    static Tensor<float, 4> prepare_image(TensorMap<uint8_t, 3> const&, Array3f mean, Array3f std);
+
+    static Tensor<uint8_t, 2> process_mask(TensorMap<float const, 4> const& mask);
+};
+
+inline float sigmoid(float x) { return 1.0f / (1.0f + std::exp(-x)); }
 
 } // namespace dlimg

@@ -49,4 +49,14 @@ Image resize(ImageView const& img, Extent target) {
     return resized;
 }
 
+void resize_mask(ImageView const& input, Extent target, uint8_t* output) {
+    int result =
+        stbir_resize_uint8(input.pixels, input.extent.width, input.extent.height, input.stride,
+                           output, target.width, target.height, /*output_stride*/ 0, 1);
+    if (result == 0) {
+        throw Exception(fmt::format("Failed to resize mask {}x{} to {}x{}", input.extent.width,
+                                    input.extent.height, target.width, target.height));
+    }
+}
+
 } // namespace dlimg

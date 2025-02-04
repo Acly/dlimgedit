@@ -13,7 +13,8 @@
 
 namespace dlimg {
 using Path = std::filesystem::path;
-struct SegmentationModel;
+struct SegmentAnythingModel;
+struct BiRefNetModel;
 
 class EnvironmentImpl {
   public:
@@ -28,12 +29,14 @@ class EnvironmentImpl {
 
     EnvironmentImpl(Options const&);
 
-    SegmentationModel& segmentation();
+    SegmentAnythingModel& segment_anything_model();
+    BiRefNetModel& birefnet_model();
 
     ~EnvironmentImpl();
 
   private:
-    Lazy<SegmentationModel> segmentation_;
+    Lazy<SegmentAnythingModel> segment_anything_;
+    Lazy<BiRefNetModel> birefnet_;
 };
 
 bool has_cuda_device();

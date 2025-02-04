@@ -11,6 +11,7 @@ Path const& root_dir();
 Path const& model_dir();
 Path const& test_dir();
 
+Environment make_env(Backend);
 Environment default_env();
 
 float rmse(ImageView const&, ImageView const&);

@@ -117,6 +117,17 @@ inline Extent Segmentation::extent() const noexcept {
     return result;
 }
 
+inline void segment_objects(ImageView const& img, Region region, uint8_t* out_mask,
+                            Environment const& env) {
+    throw_on_error(api().segment_objects(to_api(img), &region.top_left.x, out_mask, env.handle()));
+}
+
+inline Image segment_objects(ImageView const& img, Region region, Environment const& env) {
+    auto result = Image(img.extent, Channels::mask);
+    segment_objects(img, region, result.pixels(), env);
+    return result;
+}
+
 // Image
 
 inline Image::Image(Extent extent, Channels channels)

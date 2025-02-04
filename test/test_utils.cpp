@@ -53,12 +53,19 @@ Path const& test_dir() {
     return path;
 }
 
-Environment default_env() {
+Environment make_env(Backend be) {
     auto model_directory = model_dir().string();
     Options opts;
-    opts.backend = Backend::cpu;
+    opts.backend = be;
     opts.model_directory = model_directory.c_str();
     return Environment(opts);
+}
+
+Environment default_env() {
+    if (Environment::is_supported(Backend::gpu)) {
+        return make_env(Backend::gpu);
+    }
+    return make_env(Backend::cpu);
 }
 
 float rmse(ImageView const& image_a, ImageView const& image_b) {
