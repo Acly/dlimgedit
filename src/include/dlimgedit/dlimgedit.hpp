@@ -129,6 +129,8 @@ struct Region {
     constexpr Region() = default;
     constexpr Region(Point top_left, Point bottom_right);
     constexpr Region(Point origin, Extent extent);
+
+    constexpr Extent extent() const;
 };
 
 // Stores an image embedding that has been processed for segmentation, and can be used to query
@@ -167,8 +169,8 @@ class Segmentation : public Handle<dlimg_Segmentation_> {
 
 // Returns a mask which segments foreground objects found in the image (dichotomous segmentation).
 // The region argument is optional and will restrict the segmentation to the given bounding box.
-Image segment_objects(ImageView const& img, Region region, Environment const&);
-void segment_objects(ImageView const& img, Region region, uint8_t* out_mask, Environment const&);
+Image segment_objects(ImageView const& img, Environment const&);
+void segment_objects(ImageView const& img, uint8_t* out_mask, Environment const&);
 
 //
 // API and error handling

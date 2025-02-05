@@ -74,8 +74,7 @@ void get_segmentation_extent(dlimg_Segmentation handle, int* out_extent) {
 
 void destroy_segmentation(dlimg_Segmentation handle) { delete &to_impl(handle); }
 
-dlimg_Result segment_objects(dlimg_ImageView const* img, int const*, uint8_t* out_mask,
-                             dlimg_Environment env) {
+dlimg_Result segment_objects(dlimg_ImageView const* img, uint8_t* out_mask, dlimg_Environment env) {
     return try_([=] { BiRefNet::segment(to_impl(env), to_impl(img), out_mask); });
 }
 

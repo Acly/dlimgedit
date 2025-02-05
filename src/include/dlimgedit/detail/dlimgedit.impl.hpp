@@ -54,6 +54,10 @@ constexpr Region::Region(Point top_left, Point bottom_right)
 constexpr Region::Region(Point origin, Extent extent)
     : top_left(origin), bottom_right(Point{origin.x + extent.width, origin.y + extent.height}) {}
 
+constexpr Extent Region::extent() const {
+    return Extent{bottom_right.x - top_left.x, bottom_right.y - top_left.y};
+}
+
 constexpr bool operator==(Region a, Region b) {
     return a.top_left == b.top_left && a.bottom_right == b.bottom_right;
 }
@@ -117,14 +121,13 @@ inline Extent Segmentation::extent() const noexcept {
     return result;
 }
 
-inline void segment_objects(ImageView const& img, Region region, uint8_t* out_mask,
-                            Environment const& env) {
-    throw_on_error(api().segment_objects(to_api(img), &region.top_left.x, out_mask, env.handle()));
+inline void segment_objects(ImageView const& img, uint8_t* out_mask, Environment const& env) {
+    throw_on_error(api().segment_objects(to_api(img), out_mask, env.handle()));
 }
 
-inline Image segment_objects(ImageView const& img, Region region, Environment const& env) {
+inline Image segment_objects(ImageView const& img, Environment const& env) {
     auto result = Image(img.extent, Channels::mask);
-    segment_objects(img, region, result.pixels(), env);
+    segment_objects(img, result.pixels(), env);
     return result;
 }
 
