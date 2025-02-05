@@ -176,8 +176,40 @@ void SegmentationImpl::compute_mask(Point const* point, Region const* region,
 //
 // BiRefNet Model
 
-BiRefNetModel::BiRefNetModel(EnvironmentImpl& env)
-    : session(env, "segmentation", "birefnet_lite.onnx"), input_shape(session.input_shape(0)) {
+char const* select_birefnet_model(EnvironmentImpl const& env, BiRefNetModelKind kind) {
+    Path models_path = env.model_directory / "segmentation";
+    char const* fp32 = "birefnet_fp32.onnx";
+    char const* fp16 = "birefnet_fp16.onnx";
+    char const* hr_fp32 = "birefnet_hr_fp32.onnx";
+    char const* hr_fp16 = "birefnet_hr_fp16.onnx";
+
+    auto first_existing = [&](auto names) -> char const* {
+        for (auto name : names) {
+            if (exists(models_path / name)) {
+                return name;
+            }
+        }
+        throw Exception("Could not find any BiRefNet model in directory " + models_path.string());
+    };
+    if (kind == BiRefNetModelKind::general && env.backend == Backend::cpu) {
+        return first_existing(std::array{fp32, fp16, hr_fp32});
+    }
+    if (kind == BiRefNetModelKind::general && env.backend == Backend::gpu) {
+        return first_existing(std::array{fp16, fp32, hr_fp32});
+    }
+    if (kind == BiRefNetModelKind::high_res && env.backend == Backend::cpu) {
+        return first_existing(std::array{hr_fp32, hr_fp16, fp32, fp16});
+    }
+    if (kind == BiRefNetModelKind::high_res && env.backend == Backend::gpu) {
+        return first_existing(std::array{hr_fp16, hr_fp32, fp16, fp32});
+    }
+    throw Exception("Invalid BiRefNet model kind");
+}
+
+BiRefNetModel::BiRefNetModel(EnvironmentImpl& env, BiRefNetModelKind kind)
+    : kind(kind),
+      session(env, "segmentation", select_birefnet_model(env, kind)),
+      input_shape(session.input_shape(0)) {
     if (input_shape[2] == -1 || input_shape[3] == -1) {
         input_shape = Shape{1, 3, 1024, 1024};
     }
@@ -187,7 +219,11 @@ BiRefNetModel::BiRefNetModel(EnvironmentImpl& env)
 }
 
 void BiRefNet::segment(EnvironmentImpl& env, ImageView const& input_image, uint8_t* out_mask) {
-    auto& birefnet = env.birefnet_model();
+    auto kind = BiRefNetModelKind::general;
+    if (input_image.extent.width > 1536 || input_image.extent.height > 1536) {
+        kind = BiRefNetModelKind::high_res;
+    }
+    auto& birefnet = env.birefnet_model(kind);
     auto input_shape = birefnet.input_shape;
 
     auto model_resolution = Extent(int(input_shape[3]), int(input_shape[2]));
