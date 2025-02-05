@@ -44,10 +44,23 @@ bool has_cuda_device() {
         int major = 0;
         int minor = 0;
         result = cuDeviceComputeCapability(&major, &minor, 0);
-        return result == 0 && major >= 5; // cuDNN 8.9.3 for CUDA 11.x
+        return result == 0 && major >= 5; // cuDNN 9.7.0 for CUDA 12.x
     } catch (dylib::exception const&) {
         return false;
     }
+}
+
+// Check if CUDA Toolkit and cuDNN are installed.
+bool has_cudnn() {
+#ifdef DLIMG_WINDOWS
+    try {
+        dylib("cudart64_12");
+        dylib("cudnn64_9");
+    } catch (dylib::exception const&) {
+        return false;
+    }
+#endif
+    return true;
 }
 
 // Check if a DirectML compatible GPU is available.
@@ -88,7 +101,7 @@ bool has_dml_device() {
 }
 
 bool has_onnx_provider(char const* provider_name) {
-    auto providers = Ort::GetAvailableProviders();
+    static const std::vector<std::string> providers = Ort::GetAvailableProviders();
     return std::find(providers.begin(), providers.end(), provider_name) != providers.end();
 }
 
@@ -99,8 +112,8 @@ bool is_cpu_supported() {
 
 bool is_gpu_supported() {
     static const bool result =
-        is_windows ? has_onnx_provider("DmlExecutionProvider") && has_dml_device()
-                   : has_onnx_provider("CUDAExecutionProvider") && has_cuda_device();
+        (has_onnx_provider("CUDAExecutionProvider") && has_cuda_device() && has_cudnn()) ||
+        (is_windows && has_onnx_provider("DmlExecutionProvider") && has_dml_device());
     return result;
 }
 

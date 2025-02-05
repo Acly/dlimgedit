@@ -38,10 +38,11 @@ Image resize(ImageView const& img, Extent target) {
     ASSERT(img.stride >= img.extent.width * count(img.channels));
 
     auto resized = Image(target, img.channels);
-    int result =
-        stbir_resize_uint8_srgb(img.pixels, img.extent.width, img.extent.height, img.stride,
-                                resized.pixels(), resized.extent().width, resized.extent().height,
-                                0, count(img.channels), STBIR_ALPHA_CHANNEL_NONE, 0);
+    int result = stbir_resize_uint8_generic(
+        img.pixels, img.extent.width, img.extent.height, img.stride, resized.pixels(),
+        resized.extent().width, resized.extent().height, 0, count(img.channels),
+        STBIR_ALPHA_CHANNEL_NONE, /*output_stride*/ 0, STBIR_EDGE_CLAMP, STBIR_FILTER_DEFAULT,
+        STBIR_COLORSPACE_SRGB, nullptr);
     if (result == 0) {
         throw Exception(fmt::format("Failed to resize image {}x{} to {}x{}", img.extent.width,
                                     img.extent.height, target.width, target.height));
@@ -50,9 +51,10 @@ Image resize(ImageView const& img, Extent target) {
 }
 
 void resize_mask(ImageView const& input, Extent target, uint8_t* output) {
-    int result =
-        stbir_resize_uint8(input.pixels, input.extent.width, input.extent.height, input.stride,
-                           output, target.width, target.height, /*output_stride*/ 0, 1);
+    int result = stbir_resize_uint8_generic(
+        input.pixels, input.extent.width, input.extent.height, input.stride, output, target.width,
+        target.height, /*output_stride*/ 0, /*num_channels*/ 1, STBIR_ALPHA_CHANNEL_NONE, 0,
+        STBIR_EDGE_CLAMP, STBIR_FILTER_BOX, STBIR_COLORSPACE_LINEAR, nullptr);
     if (result == 0) {
         throw Exception(fmt::format("Failed to resize mask {}x{} to {}x{}", input.extent.width,
                                     input.extent.height, target.width, target.height));

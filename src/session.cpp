@@ -60,8 +60,11 @@ Ort::Session create_session(EnvironmentImpl& env, char const* kind, char const* 
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
     if (env.backend == Backend::gpu) {
-        if (is_windows) {
+        if (has_onnx_provider("CUDAExecutionProvider")) {
+            opts.AppendExecutionProvider_CUDA({});
+        }
 #ifdef DLIMG_WINDOWS
+        if (has_onnx_provider("DmlExecutionProvider")) {
             // Use DirectML. The following two options are required:
             opts.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
             opts.DisableMemPattern();
@@ -70,11 +73,8 @@ Ort::Session create_session(EnvironmentImpl& env, char const* kind, char const* 
             check(Ort::GetApi().GetExecutionProviderApi("DML", ORT_API_VERSION,
                                                         (void const**)(&dml_api)));
             check(dml_api->SessionOptionsAppendExecutionProvider_DML(opts_raw, 0));
-#endif
-        } else if (is_linux) {
-            // Use CUDA.
-            opts.AppendExecutionProvider_CUDA({});
         }
+#endif
     }
     Path model_path = env.model_directory / kind / model;
     if (!exists(model_path)) {

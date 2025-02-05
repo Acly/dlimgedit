@@ -178,6 +178,9 @@ void SegmentationImpl::compute_mask(Point const* point, Region const* region,
 
 BiRefNetModel::BiRefNetModel(EnvironmentImpl& env)
     : session(env, "segmentation", "birefnet_lite.onnx"), input_shape(session.input_shape(0)) {
+    if (input_shape[2] == -1 || input_shape[3] == -1) {
+        input_shape = Shape{1, 3, 1024, 1024};
+    }
     ASSERT(input_shape.rank() == 4);
     ASSERT(input_shape[1] == 3);
     ASSERT(session.output_shape(0).rank() == 4);
@@ -192,7 +195,7 @@ void BiRefNet::segment(EnvironmentImpl& env, ImageView const& input_image, uint8
 
     const Array3f mean{0.485f, 0.456f, 0.406f};
     const Array3f std{0.229f, 0.224f, 0.225f};
-    auto image_tensor = prepare_image(as_tensor(resized_image), mean, std);
+    auto image_tensor = prepare_image(resized_image, mean, std);
 
     auto output = birefnet.session(image_tensor);
 
@@ -202,21 +205,18 @@ void BiRefNet::segment(EnvironmentImpl& env, ImageView const& input_image, uint8
     resize_mask(mask_img, input_image.extent, out_mask);
 }
 
-Tensor<float, 4> BiRefNet::prepare_image(TensorMap<uint8_t, 3> const& img, Array3f mean,
-                                         Array3f std) {
-    auto width = img.dimension(0);
-    auto height = img.dimension(1);
-
-    auto image_tensor = Tensor<float, 4>(Shape{1, 3, height, width});
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            for (int c = 0; c < 3; ++c) {
-                float value = float(img(y, x, c)) / 255.f;
-                image_tensor(0, c, y, x) = (value - mean[c]) / std[c];
+Tensor<float, 4> BiRefNet::prepare_image(ImageView const& img, Array3f mean, Array3f std) {
+    auto input = as_tensor(img);
+    auto output = Tensor<float, 4>(Shape{1, 3, img.extent.height, img.extent.width});
+    for (int c = 0; c < 3; ++c) {
+        for (int y = 0; y < img.extent.height; ++y) {
+            for (int x = 0; x < img.extent.width; ++x) {
+                float value = float(input(y, x, c)) / 255.f;
+                output(0, c, y, x) = (value - mean[c]) / std[c];
             }
         }
     }
-    return image_tensor;
+    return output;
 }
 
 Tensor<uint8_t, 2> BiRefNet::process_mask(TensorMap<float const, 4> const& mask) {
