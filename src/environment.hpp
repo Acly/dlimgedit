@@ -41,5 +41,6 @@ class EnvironmentImpl {
 
 bool has_cuda_device();
 bool has_dml_device();
+bool has_onnx_provider(char const* provider_name);
 
 } // namespace dlimg

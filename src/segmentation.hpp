@@ -76,7 +76,7 @@ struct BiRefNetModel {
 struct BiRefNet {
     static void segment(EnvironmentImpl&, ImageView const&, uint8_t* out_mask);
 
-    static Tensor<float, 4> prepare_image(TensorMap<uint8_t, 3> const&, Array3f mean, Array3f std);
+    static Tensor<float, 4> prepare_image(ImageView const&, Array3f mean, Array3f std);
 
     static Tensor<uint8_t, 2> process_mask(TensorMap<float const, 4> const& mask);
 };
