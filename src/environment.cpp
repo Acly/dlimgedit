@@ -145,7 +145,10 @@ SegmentAnythingModel& EnvironmentImpl::segment_anything_model() {
     return segment_anything_.get_or_create(*this);
 }
 
-BiRefNetModel& EnvironmentImpl::birefnet_model() { return birefnet_.get_or_create(*this); }
+BiRefNetModel& EnvironmentImpl::birefnet_model(BiRefNetModelKind kind) {
+    return kind == BiRefNetModelKind::high_res ? birefnet_hr_.get_or_create(*this, kind)
+                                               : birefnet_.get_or_create(*this, kind);
+}
 
 EnvironmentImpl::~EnvironmentImpl() = default;
 

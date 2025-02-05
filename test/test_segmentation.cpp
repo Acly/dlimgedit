@@ -181,16 +181,23 @@ TEST_CASE("BiRefNet.process_mask", "[birefnet]") {
 
 TEST_CASE("BiRefNet.segment_objects", "[birefnet]") {
     auto env = default_env();
-    auto img = Image::load(test_dir() / "input" / "truck.jpg");
+    auto img = Image::load(test_dir() / "input" / "wardrobe.png");
     auto seg = segment_objects(img, env);
-    check_image_matches(seg, "test_birefnet_truck.png");
+    check_image_matches(seg, "test_birefnet_wardrobe.png");
 }
 
 TEST_CASE("BiRefNet.segment_objects[cpu]", "[birefnet]") {
     auto env = make_env(Backend::cpu);
-    auto img = Image::load(test_dir() / "input" / "wardrobe.png");
-    auto seg = segment_objects(img, env);
-    check_image_matches(seg, "test_birefnet_wardrobe.png");
+    SECTION("low-res") {
+        auto img = Image::load(test_dir() / "input" / "cat_and_hat.png");
+        auto seg = segment_objects(img, env);
+        check_image_matches(seg, "test_birefnet_cat.png");
+    }
+    SECTION("high-res") {
+        auto img = Image::load(test_dir() / "input" / "truck.jpg");
+        auto seg = segment_objects(img, env);
+        check_image_matches(seg, "test_birefnet_truck.png");
+    }
 }
 
 } // namespace dlimg

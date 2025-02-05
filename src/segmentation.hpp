@@ -66,11 +66,14 @@ Tensor<float, 3> create_image_tensor(ImageView const&);
 void write_mask_image(TensorMap<float const, 4> const&, int index, Extent const&,
                       uint8_t* out_mask);
 
+enum class BiRefNetModelKind { general, high_res };
+
 struct BiRefNetModel {
+    BiRefNetModelKind kind;
     Session session;
     Shape input_shape;
 
-    explicit BiRefNetModel(EnvironmentImpl&);
+    explicit BiRefNetModel(EnvironmentImpl&, BiRefNetModelKind);
 };
 
 struct BiRefNet {
