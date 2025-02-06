@@ -178,10 +178,10 @@ void SegmentationImpl::compute_mask(Point const* point, Region const* region,
 
 char const* select_birefnet_model(EnvironmentImpl const& env, BiRefNetModelKind kind) {
     Path models_path = env.model_directory / "segmentation";
-    char const* fp32 = "birefnet_fp32.onnx";
-    char const* fp16 = "birefnet_fp16.onnx";
-    char const* hr_fp32 = "birefnet_hr_fp32.onnx";
-    char const* hr_fp16 = "birefnet_hr_fp16.onnx";
+    char const* cpu = "birefnet_cpu.onnx";
+    char const* gpu = "birefnet_gpu.onnx";
+    char const* hr_cpu = "birefnet_hr_cpu.onnx";
+    char const* hr_gpu = "birefnet_hr_gpu.onnx";
 
     auto first_existing = [&](auto names) -> char const* {
         for (auto name : names) {
@@ -192,16 +192,16 @@ char const* select_birefnet_model(EnvironmentImpl const& env, BiRefNetModelKind 
         throw Exception("Could not find any BiRefNet model in directory " + models_path.string());
     };
     if (kind == BiRefNetModelKind::general && env.backend == Backend::cpu) {
-        return first_existing(std::array{fp32, fp16, hr_fp32});
+        return first_existing(std::array{cpu, gpu, hr_cpu, hr_gpu});
     }
     if (kind == BiRefNetModelKind::general && env.backend == Backend::gpu) {
-        return first_existing(std::array{fp16, fp32, hr_fp32});
+        return first_existing(std::array{gpu, cpu, hr_gpu, hr_cpu});
     }
     if (kind == BiRefNetModelKind::high_res && env.backend == Backend::cpu) {
-        return first_existing(std::array{hr_fp32, hr_fp16, fp32, fp16});
+        return first_existing(std::array{hr_cpu, hr_gpu, cpu, gpu});
     }
     if (kind == BiRefNetModelKind::high_res && env.backend == Backend::gpu) {
-        return first_existing(std::array{hr_fp16, hr_fp32, fp16, fp32});
+        return first_existing(std::array{hr_gpu, hr_cpu, gpu, cpu});
     }
     throw Exception("Invalid BiRefNet model kind");
 }
