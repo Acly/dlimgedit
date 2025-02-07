@@ -43,9 +43,9 @@ jobs:
       run: cpack -C ${{env.BUILD_TYPE}}
 
     - name: Artifact
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v4
       with:
-        name: packages
+        name: package-${{ matrix.os }}
         path: |
           build/dlimgedit-*.zip
           build/dlimgedit-*.tar.gz

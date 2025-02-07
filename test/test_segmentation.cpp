@@ -194,6 +194,9 @@ TEST_CASE("BiRefNet.segment_objects[cpu]", "[birefnet]") {
         check_image_matches(seg, "test_birefnet_cat.png");
     }
     SECTION("high-res") {
+        if (!exists(model_dir() / "segmentation" / "birefnet_hr_cpu.onnx")) {
+            SKIP("No high-res model available");
+        }
         auto img = Image::load(test_dir() / "input" / "truck.jpg");
         auto seg = segment_objects(img, env);
         check_image_matches(seg, "test_birefnet_truck.png");
