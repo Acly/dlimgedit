@@ -40,7 +40,10 @@ install(TARGETS dlimgedit
 install(DIRECTORY src/include/ DESTINATION include)
 install(FILES README.md LICENSE DESTINATION .)
 if(DLIMGEDIT_INSTALL_MODELS)
-  install(DIRECTORY models/ DESTINATION models FILES_MATCHING PATTERN "*.onnx")
+  install(DIRECTORY models/
+    DESTINATION models FILES_MATCHING
+    PATTERN "*.onnx"
+    PATTERN "*hr*.onnx" EXCLUDE)
 endif()
 if(DLIMGEDIT_INSTALL_RUNTIME)
   install(FILES ${ONNX_RUNTIME_DEPENDENCIES} DESTINATION bin)
