@@ -58,6 +58,7 @@ Ort::Session create_session(EnvironmentImpl& env, char const* kind, char const* 
     auto [opts, opts_raw] = create_session_options();
     opts.SetIntraOpNumThreads(env.thread_count);
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+    opts.DisableMemPattern(); // Causes big memory allocation on second run (+5GB for BiRefNet)
 
     if (env.backend == Backend::gpu) {
         if (has_onnx_provider("CUDAExecutionProvider")) {
@@ -67,7 +68,6 @@ Ort::Session create_session(EnvironmentImpl& env, char const* kind, char const* 
         if (has_onnx_provider("DmlExecutionProvider")) {
             // Use DirectML. The following two options are required:
             opts.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
-            opts.DisableMemPattern();
 
             OrtDmlApi* dml_api = nullptr;
             check(Ort::GetApi().GetExecutionProviderApi("DML", ORT_API_VERSION,
