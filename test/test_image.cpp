@@ -27,10 +27,10 @@ TEST_CASE("Image load", "[image]") {
 TEST_CASE("Image save", "[image]") {
     auto img = Image(Extent{16, 16}, Channels::rgba);
     for (int i = 0; i < 16 * 16; ++i) {
-        img.pixels()[i * 4 + 0] = 255;
-        img.pixels()[i * 4 + 1] = i;
-        img.pixels()[i * 4 + 2] = 0;
-        img.pixels()[i * 4 + 3] = 255;
+        img.pixels()[i * 4 + 0] = uint8_t(255);
+        img.pixels()[i * 4 + 1] = uint8_t(i);
+        img.pixels()[i * 4 + 2] = uint8_t(0);
+        img.pixels()[i * 4 + 3] = uint8_t(255);
     }
     auto filepath = test_dir() / "result" / "test_image_save.png";
     Image::save(img, filepath);
@@ -51,10 +51,10 @@ TEST_CASE("Image save", "[image]") {
 TEST_CASE("Image resize", "[image]") {
     auto img = Image(Extent(8, 8), Channels::rgba);
     for (int i = 0; i < 8 * 8; ++i) {
-        img.pixels()[i * 4 + 0] = 255;
-        img.pixels()[i * 4 + 1] = 4 * (i / 8);
-        img.pixels()[i * 4 + 2] = 4 * (i % 8);
-        img.pixels()[i * 4 + 3] = 255;
+        img.pixels()[i * 4 + 0] = uint8_t(255);
+        img.pixels()[i * 4 + 1] = uint8_t(4 * (i / 8));
+        img.pixels()[i * 4 + 2] = uint8_t(4 * (i % 8));
+        img.pixels()[i * 4 + 3] = uint8_t(255);
     }
     auto const result = resize(img, Extent{4, 4});
     REQUIRE(result.extent().width == 4);
