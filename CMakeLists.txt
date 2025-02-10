@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(dlimgedit VERSION 1.1.0 LANGUAGES CXX)
+project(dlimgedit VERSION 1.1.1 LANGUAGES CXX)
 
 option(DLIMGEDIT_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
 option(DLIMGEDIT_INSTALL_MODELS "Install models" ${PROJECT_IS_TOP_LEVEL})
