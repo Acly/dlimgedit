@@ -5,3 +5,9 @@ install
 test/result
 *.onnx
 *.pt
+*.pth
+*.bin
+*.gguf
+*.zip
+*.tar.gz
+__pycache__
