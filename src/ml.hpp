@@ -16,7 +16,7 @@ struct Model {
     ggml_context* context;
     TensorName prefix;
 
-    Tensor operator[](char const* name) const {
+    Tensor find(char const* name) const {
         auto full_name = TensorName();
         if (prefix) {
             name = full_name.format("{}.{}", prefix.c_str(), name);
@@ -24,7 +24,20 @@ struct Model {
         return ggml_get_tensor(context, name);
     }
 
-    Model group(char const* sub_module) const { return Model{context, TensorName(sub_module)}; }
+    Tensor operator[](char const* name) const {
+        if (Tensor result = find(name)) {
+            return result;
+        }
+        throw std::runtime_error(fmt::format("Tensor not found: {}.{}", prefix.view(), name));
+    }
+
+    Model group(char const* sub_module) const {
+        auto new_prefix = TensorName(sub_module);
+        if (prefix) {
+            new_prefix = TensorName().format("{}.{}", prefix.c_str(), sub_module);
+        }
+        return Model{context, new_prefix};
+    }
 
     void add_tensor(char const* name, Tensor tensor) const {
         auto full_name = TensorName();

@@ -34,10 +34,10 @@ struct Workbench {
 
     Workbench(int input_count, RawTensor* inputs_raw, RawTensor* output_raw) {
         auto context_params = ggml_init_params{};
-        context_params.mem_size = output_raw->size_bytes() +
+        context_params.mem_size = 48 * output_raw->size_bytes() +
                                   ggml_tensor_overhead() * (input_count + 1) +
                                   ggml_graph_overhead() + 2048 * ggml_tensor_overhead();
-        context_params.no_alloc = false;
+        context_params.no_alloc = true;
         context = ggml_init(context_params);
         model = Model{context};
 
@@ -46,11 +46,13 @@ struct Workbench {
             model.create_tensor(raw.name, {raw.n, raw.c, raw.h, raw.w},
                                 std::span(raw.data, raw.size()));
         }
+        ggml_set_no_alloc(context, false);
         graph = ggml_new_graph(context);
     }
 
     void run(RawTensor* output_raw) {
         GGML_ASSERT(output_raw->size_bytes() == ggml_nbytes(output));
+        output = ggml_cont(context, output);
 
         ggml_build_forward_expand(graph, output);
         ggml_graph_compute_with_ctx(context, graph, 1);
@@ -87,6 +89,8 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             w.output = layer_norm(w.model, w.model["input"]);
         } else if (name == "linear") {
             w.output = linear(w.model, w.model["input"]);
+        } else if (name == "conv_2d_batch_norm") {
+            w.output = conv_2d_batch_norm(w.model, w.model["input"], 2, 1);
         } else if (name == "patch_embed") {
             w.output = patch_embed(w.model, w.model["input"]);
         } else if (name == "mb_conv") {

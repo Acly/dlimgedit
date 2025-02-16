@@ -48,10 +48,12 @@ def invoke_test(
     test_case: str,
     input: torch.Tensor,
     output: torch.Tensor,
+    state: dict[str, torch.Tensor],
     **kwargs: dict[str, torch.Tensor],
 ):
+    state.update(kwargs)
     raw_inputs = [to_raw_tensor("input", input)]
-    raw_inputs += [to_raw_tensor(name, tensor) for name, tensor in kwargs.items()]
+    raw_inputs += [to_raw_tensor(name, tensor) for name, tensor in state.items()]
     raw_output = to_raw_tensor("output", output)
     result = lib.dlimg_workbench(
         test_case.encode(),

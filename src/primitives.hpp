@@ -10,7 +10,7 @@ namespace dlimg {
 
 inline Tensor linear(Model m, Tensor x) {
     x = ggml_mul_mat(m, m["weight"], x);
-    if (Tensor bias = m["bias"]) {
+    if (Tensor bias = m.find("bias")) {
         x = ggml_add_inplace(m, x, bias);
     }
     return x;
@@ -18,7 +18,7 @@ inline Tensor linear(Model m, Tensor x) {
 
 inline Tensor conv_2d(Model m, Tensor x, int stride = 1, int pad = 0, int dilation = 1) {
     x = ggml_conv_2d(m, m["weight"], x, stride, stride, pad, pad, dilation, dilation);
-    if (Tensor bias = m["bias"]) {
+    if (Tensor bias = m.find("bias")) {
         bias = ggml_reshape_4d(m, bias, 1, 1, bias->ne[0], 1);
         x = ggml_add_inplace(m, x, bias);
     }
