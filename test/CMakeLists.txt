@@ -26,6 +26,6 @@ target_link_libraries(dlimgedit_workbench PRIVATE
   dlimgedit fmt onnxruntime ggml
 )
 if (MSVC)
-  target_compile_options(dlimgedit_workbench PRIVATE /Zi)
+  target_compile_options(dlimgedit_workbench PRIVATE /Zi /Od)
   target_link_options(dlimgedit_workbench PRIVATE /DEBUG)
 endif()

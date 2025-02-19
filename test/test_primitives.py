@@ -10,7 +10,7 @@ def test_linear():
     bias = torch.tensor([7, 21, -5]).float()
     result = torch.zeros(2, 3)
 
-    workbench.invoke_test("linear", input=x, weight=weight, bias=bias, output=result)
+    workbench.invoke_test("linear", x, result, {}, weight=weight, bias=bias)
 
     expected = torch.nn.functional.linear(x, weight, bias)
     assert torch.allclose(result, expected)
@@ -21,16 +21,16 @@ def test_conv_2d(bias_mode: str):
     x = torch.rand(1, 3, 4, 5)
     weight = torch.rand(2, 3, 3, 3)
     bias = None
-    args = dict(input=x, weight=weight)
+    args = dict(weight=weight)
     if bias_mode == "with_bias":
         bias = torch.tensor([7, 21]).float()
         args["bias"] = bias
-    args["output"] = torch.zeros(1, 2, 2, 3)
+    result = torch.zeros(1, 2, 2, 3)
 
-    workbench.invoke_test("conv_2d", **args)
+    workbench.invoke_test("conv_2d", x, result, args)
 
     expected = torch.nn.functional.conv2d(x, weight, bias=bias)
-    assert torch.allclose(args["output"], expected)
+    assert torch.allclose(result, expected)
 
 
 def test_conv_2d_depth_wise():
@@ -41,7 +41,7 @@ def test_conv_2d_depth_wise():
     k = k.repeat(3, 1, 1, 1)
     result = torch.zeros(1, 3, 2, 2)
 
-    workbench.invoke_test("conv_2d_depth_wise", x, result, weight=k)
+    workbench.invoke_test("conv_2d_depth_wise", x, result, dict(weight=k))
 
     expected = torch.nn.functional.conv2d(x, k, groups=3)
     assert torch.allclose(result, expected)
@@ -55,15 +55,8 @@ def test_batch_norm_2d():
     var = torch.rand(3)
     result = torch.zeros(1, 3, 4, 5)
 
-    workbench.invoke_test(
-        "batch_norm_2d",
-        input=x,
-        weight=weight,
-        bias=bias,
-        running_mean=mean,
-        running_var=var,
-        output=result,
-    )
+    state = dict(weight=weight, bias=bias, running_mean=mean, running_var=var)
+    workbench.invoke_test("batch_norm_2d", x, result, state)
 
     expected = torch.nn.functional.batch_norm(x, mean, var, weight, bias, eps=0)
     assert torch.allclose(result, expected)
@@ -76,9 +69,7 @@ def test_layer_norm():
     bias = torch.rand(dim)
     result = torch.zeros(4, 5, dim)
 
-    workbench.invoke_test(
-        "layer_norm", input=x, weight=weight, bias=bias, output=result
-    )
+    workbench.invoke_test("layer_norm", x, result, dict(weight=weight, bias=bias))
 
     expected = torch.nn.functional.layer_norm(x, [dim], weight, bias, eps=1e-5)
     assert torch.allclose(result, expected, atol=1e-6)

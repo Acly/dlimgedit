@@ -64,6 +64,14 @@ def invoke_test(
     assert result == 0, f"Test case {test_case} failed"
 
 
+def randomize(state_dict: dict[str, torch.Tensor]):
+    return {
+        k: torch.rand_like(v)
+        for k, v in state_dict.items()
+        if v.dtype.is_floating_point
+    }
+
+
 def print_results(result: torch.Tensor, expected: torch.Tensor):
     print("\nresult -----", result, sep="\n")
     print("\nexpected ---", expected, sep="\n")

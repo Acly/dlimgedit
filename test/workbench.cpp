@@ -99,6 +99,11 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             w.output = patch_merging(w.model, w.model["input"], 64);
         } else if (name == "mlp") {
             w.output = mlp(w.model, w.model["input"]);
+        } else if (name == "attention") {
+            w.output = attention(w.model, w.model["input"], 4, 2);
+        } else if (name == "tiny_vit_block") {
+            w.output = tiny_vit_block(w.model, w.model["input"], 8, /*dim*/ 4, /*num_heads*/ 2,
+                                      /*window_size*/ 5);
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }

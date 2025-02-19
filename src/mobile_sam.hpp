@@ -68,24 +68,80 @@ inline Tensor mlp(Model m, Tensor x) {
 }
 
 inline Tensor attention(Model m, Tensor x, int dim, int num_heads) {
-    x = layer_norm(m.group("norm"), x);
-
     GGML_ASSERT(dim % num_heads == 0);
     int key_dim = dim / num_heads;
-    int B = x->ne[3];
-    int N = x->ne[2];
+    int B = x->ne[2];
+    int N = x->ne[1];
+
+    x = layer_norm(m.group("norm"), x);
 
     Tensor qkv = linear(m.group("qkv"), x);
-    qkv = ggml_reshape_4d(m, qkv, key_dim * 3, num_heads - 1, N, B);
+    qkv = ggml_reshape_4d(m, qkv, key_dim, 3, num_heads * N, B); // [B, N * num_heads, 3, key_dim]
+    qkv = ggml_cont(m, ggml_permute(m, qkv, 0, 3, 1, 2));        // [3, B, N * num_heads, key_dim]
 
-    // ggml_tesnor* v = ...
+    // split([key_dim, key_dim, key_dim], dim=3)
+    size_t offset = qkv->nb[3];
+    auto split = [=](Model m, Tensor tensor, size_t index) {
+        tensor = ggml_view_3d(m, tensor, key_dim, num_heads * N, B, tensor->nb[1], tensor->nb[2],
+                              index * offset);
+        tensor = ggml_reshape_4d(m, tensor, key_dim, num_heads, N, B);
+        return tensor;
+    };
 
-    Tensor attn = nullptr;
-    attn = ggml_soft_max_inplace(m, attn);
-    // x = ggml_mul_mat(c, attn, v);
-    x = ggml_transpose(m, x);
+    Tensor q = split(m, qkv, 0);
+    Tensor k = split(m, qkv, 1);
+    Tensor v = split(m, qkv, 2);
+    q = ggml_cont(m, ggml_permute(m, q, 0, 2, 1, 3));
+    k = ggml_cont(m, ggml_permute(m, k, 0, 2, 1, 3));
+    v = ggml_cont(m, ggml_permute(m, v, 1, 2, 0, 3)); // transpose for mul_mat later
+
+    Tensor attn = ggml_mul_mat(m, k, q); // q @ k (k is transposed in mul_mat)
+    attn = ggml_scale_inplace(m, attn, 1.0f / std::sqrtf(float(key_dim)));
+    attn = ggml_add_inplace(m, attn, m["attention_biases_indexed"]);
+    attn = ggml_soft_max(m, attn);
+
+    x = ggml_mul_mat(m, v, attn);                     // attn @ v
+    x = ggml_cont(m, ggml_permute(m, x, 0, 2, 1, 3)); // transpose(1, 2)
     x = ggml_reshape_3d(m, x, key_dim * num_heads, N, B);
     x = linear(m.group("proj"), x);
+    return x;
+}
+
+inline Tensor tiny_vit_block(Model m, Tensor x, int input_resolution, int dim, int num_heads,
+                             int window_size) {
+    int H = input_resolution;
+    int W = input_resolution;
+    int B = x->ne[2];
+    int L = x->ne[1];
+    int C = x->ne[0];
+    GGML_ASSERT(L == H * W);
+    GGML_ASSERT(H != window_size && W != window_size);
+
+    Tensor res_x = x;
+    x = ggml_reshape_4d(m, x, C, W, H, B);
+
+    // window partition
+    x = ggml_win_part(m, x, window_size);
+    x = ggml_reshape_3d(m, x, C, window_size * window_size, x->ne[3]);
+
+    x = attention(m.group("attn"), x, dim, num_heads);
+
+    // window reverse
+    x = ggml_reshape_4d(m, x, C, window_size, window_size, x->ne[2]);
+    x = ggml_win_unpart(m, x, W, H, window_size);
+
+    x = ggml_reshape_3d(m, x, C, L, B);
+    x = ggml_add_inplace(m, x, res_x);
+
+    x = ggml_cont(m, ggml_transpose(m, x));
+    x = ggml_reshape_4d(m, x, W, H, C, B);
+
+    x = conv_2d_batch_norm(m.group("local_conv"), x, 1, 1, 1, /* groups */ dim);
+    x = ggml_reshape_3d(m, x, L, C, B);
+    x = ggml_cont(m, ggml_transpose(m, x));
+
+    Tensor x_mlp = mlp(m.group("mlp"), x);
+    x = ggml_add_inplace(m, x, x_mlp);
     return x;
 }
 
