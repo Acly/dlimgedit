@@ -42,6 +42,78 @@ def test_conv_2d_batch_norm():
     assert torch.allclose(result, expected)
 
 
+class PatchEmbed(torch.nn.Module):
+    def __init__(self, in_chans, embed_dim, resolution, activation):
+        super().__init__()
+        img_size: tuple[int, int] = (
+            resolution
+            if isinstance(resolution, tuple)
+            else (
+                resolution,
+                resolution,
+            )
+        )
+        self.patches_resolution = (img_size[0] // 4, img_size[1] // 4)
+        self.num_patches = self.patches_resolution[0] * self.patches_resolution[1]
+        self.in_chans = in_chans
+        self.embed_dim = embed_dim
+        n = embed_dim
+        self.seq = torch.nn.Sequential(
+            Conv2d_BN(in_chans, n // 2, 3, 2, 1),
+            activation(),
+            Conv2d_BN(n // 2, n, 3, 2, 1),
+        )
+
+    def forward(self, x):
+        return self.seq(x)
+
+
+def test_patch_embed():
+    patch_embed = PatchEmbed(3, 4, (8, 8), torch.nn.GELU)
+    state = workbench.randomize(patch_embed.state_dict())
+    patch_embed.load_state_dict(state)
+    patch_embed.eval()
+
+    x = torch.rand(1, 3, 8, 8)
+    expected = patch_embed(x)
+
+    add_variance_epsilon(state)
+    result = torch.zeros_like(expected).contiguous()
+    workbench.invoke_test("patch_embed", x, result, state)
+
+    assert torch.allclose(result, expected, rtol=0.001, atol=0.02)
+
+
+class LayerNorm2d(torch.nn.Module):
+    def __init__(self, num_channels: int, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.weight = torch.nn.Parameter(torch.ones(num_channels))
+        self.bias = torch.nn.Parameter(torch.zeros(num_channels))
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        u = x.mean(1, keepdim=True)
+        s = (x - u).pow(2).mean(1, keepdim=True)
+        x = (x - u) / torch.sqrt(s + self.eps)
+        x = self.weight[:, None, None] * x + self.bias[:, None, None]
+        return x
+
+
+def test_layer_norm_2d():
+    layer_norm = LayerNorm2d(4)
+    state = workbench.randomize(layer_norm.state_dict())
+    layer_norm.load_state_dict(state)
+    layer_norm.eval()
+
+    x = torch.rand(1, 4, 8, 8)
+    expected = layer_norm(x)
+
+    result = torch.zeros_like(expected).contiguous()
+    workbench.invoke_test("layer_norm_2d", x, result, state)
+
+    assert torch.allclose(result, expected, rtol=0.001, atol=0.02)
+
+
 class MBConv(torch.nn.Module):
     def __init__(self, in_chans, out_chans, expand_ratio, activation, drop_path):
         super().__init__()
@@ -411,3 +483,310 @@ def test_tiny_vit_block():
     workbench.invoke_test("tiny_vit_block", x, result, state)
 
     assert torch.allclose(result, expected, rtol=0.001, atol=0.02)
+
+
+class ConvLayer(torch.nn.Module):
+    def __init__(
+        self,
+        dim,
+        input_resolution,
+        depth,
+        activation,
+        drop_path=0.0,
+        downsample=None,
+        use_checkpoint=False,
+        out_dim=None,
+        conv_expand_ratio=4.0,
+    ):
+
+        super().__init__()
+        self.dim = dim
+        self.input_resolution = input_resolution
+        self.depth = depth
+        self.use_checkpoint = use_checkpoint
+
+        # build blocks
+        self.blocks = torch.nn.ModuleList(
+            [
+                MBConv(
+                    dim,
+                    dim,
+                    conv_expand_ratio,
+                    activation,
+                    drop_path[i] if isinstance(drop_path, list) else drop_path,
+                )
+                for i in range(depth)
+            ]
+        )
+
+        # patch merging layer
+        if downsample is not None:
+            self.downsample = downsample(
+                input_resolution, dim=dim, out_dim=out_dim, activation=activation
+            )
+        else:
+            self.downsample = None
+
+    def forward(self, x):
+        for blk in self.blocks:
+
+            x = blk(x)
+        if self.downsample is not None:
+            x = self.downsample(x)
+        return x
+
+
+class BasicLayer(torch.nn.Module):
+
+    def __init__(
+        self,
+        dim,
+        input_resolution,
+        depth,
+        num_heads,
+        window_size,
+        mlp_ratio=4.0,
+        drop=0.0,
+        drop_path=0.0,
+        downsample=None,
+        use_checkpoint=False,
+        local_conv_size=3,
+        activation=torch.nn.GELU,
+        out_dim=None,
+    ):
+
+        super().__init__()
+        self.dim = dim
+        self.input_resolution = input_resolution
+        self.depth = depth
+        self.use_checkpoint = use_checkpoint
+
+        # build blocks
+        self.blocks = torch.nn.ModuleList(
+            [
+                TinyViTBlock(
+                    dim=dim,
+                    input_resolution=input_resolution,
+                    num_heads=num_heads,
+                    window_size=window_size,
+                    mlp_ratio=mlp_ratio,
+                    drop=drop,
+                    drop_path=(
+                        drop_path[i] if isinstance(drop_path, list) else drop_path
+                    ),
+                    local_conv_size=local_conv_size,
+                    activation=activation,
+                )
+                for i in range(depth)
+            ]
+        )
+
+        # patch merging layer
+        if downsample is not None:
+            self.downsample = downsample(
+                input_resolution, dim=dim, out_dim=out_dim, activation=activation
+            )
+        else:
+            self.downsample = None
+
+    def forward(self, x):
+        for blk in self.blocks:
+
+            x = blk(x)
+        if self.downsample is not None:
+            x = self.downsample(x)
+        return x
+
+    def extra_repr(self) -> str:
+        return f"dim={self.dim}, input_resolution={self.input_resolution}, depth={self.depth}"
+
+
+class TinyViT(torch.nn.Module):
+    def __init__(
+        self,
+        img_size=224,
+        in_chans=3,
+        num_classes=1000,
+        embed_dims=[96, 192, 384, 768],
+        depths=[2, 2, 6, 2],
+        num_heads=[3, 6, 12, 24],
+        window_sizes=[7, 7, 14, 7],
+        mlp_ratio=4.0,
+        drop_rate=0.0,
+        drop_path_rate=0.1,
+        use_checkpoint=False,
+        mbconv_expand_ratio=4.0,
+        local_conv_size=3,
+        layer_lr_decay=1.0,
+    ):
+        super().__init__()
+        self.img_size = img_size
+        self.num_classes = num_classes
+        self.depths = depths
+        self.num_layers = len(depths)
+        self.mlp_ratio = mlp_ratio
+
+        activation = torch.nn.GELU
+
+        self.patch_embed = PatchEmbed(
+            in_chans=in_chans,
+            embed_dim=embed_dims[0],
+            resolution=img_size,
+            activation=activation,
+        )
+
+        patches_resolution = self.patch_embed.patches_resolution
+        self.patches_resolution = patches_resolution
+
+        # stochastic depth
+        dpr = [
+            x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))
+        ]  # stochastic depth decay rule
+
+        # build layers
+        self.layers = torch.nn.ModuleList()
+        for i_layer in range(self.num_layers):
+            kwargs = dict(
+                dim=embed_dims[i_layer],
+                input_resolution=(
+                    patches_resolution[0]
+                    // (2 ** (i_layer - 1 if i_layer == 3 else i_layer)),
+                    patches_resolution[1]
+                    // (2 ** (i_layer - 1 if i_layer == 3 else i_layer)),
+                ),
+                #   input_resolution=(patches_resolution[0] // (2 ** i_layer),
+                #                     patches_resolution[1] // (2 ** i_layer)),
+                depth=depths[i_layer],
+                drop_path=dpr[sum(depths[:i_layer]) : sum(depths[: i_layer + 1])],
+                downsample=PatchMerging if (i_layer < self.num_layers - 1) else None,
+                use_checkpoint=use_checkpoint,
+                out_dim=embed_dims[min(i_layer + 1, len(embed_dims) - 1)],
+                activation=activation,
+            )
+            if i_layer == 0:
+                layer = ConvLayer(
+                    conv_expand_ratio=mbconv_expand_ratio,
+                    **kwargs,
+                )
+            else:
+                layer = BasicLayer(
+                    num_heads=num_heads[i_layer],
+                    window_size=window_sizes[i_layer],
+                    mlp_ratio=self.mlp_ratio,
+                    drop=drop_rate,
+                    local_conv_size=local_conv_size,
+                    **kwargs,
+                )
+            self.layers.append(layer)
+
+        # Classifier head
+        self.norm_head = torch.nn.LayerNorm(embed_dims[-1])
+        self.head = (
+            torch.nn.Linear(embed_dims[-1], num_classes)
+            if num_classes > 0
+            else torch.nn.Identity()
+        )
+
+        # init weights
+        # self.apply(self._init_weights)
+        self.set_layer_lr_decay(layer_lr_decay)
+        self.neck = torch.nn.Sequential(
+            torch.nn.Conv2d(
+                embed_dims[-1],
+                256,
+                kernel_size=1,
+                bias=False,
+            ),
+            LayerNorm2d(256),
+            torch.nn.Conv2d(
+                256,
+                256,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            LayerNorm2d(256),
+        )
+
+    def set_layer_lr_decay(self, layer_lr_decay):
+        decay_rate = layer_lr_decay
+
+        # layers -> blocks (depth)
+        depth = sum(self.depths)
+        lr_scales = [decay_rate ** (depth - i - 1) for i in range(depth)]
+        # print("LR SCALES:", lr_scales)
+
+        def _set_lr_scale(m, scale):
+            for p in m.parameters():
+                p.lr_scale = scale
+
+        self.patch_embed.apply(lambda x: _set_lr_scale(x, lr_scales[0]))
+        i = 0
+        for layer in self.layers:
+            for block in layer.blocks:
+                block.apply(lambda x: _set_lr_scale(x, lr_scales[i]))
+                i += 1
+            if layer.downsample is not None:
+                layer.downsample.apply(lambda x: _set_lr_scale(x, lr_scales[i - 1]))
+        assert i == depth
+        for m in [self.norm_head, self.head]:
+            m.apply(lambda x: _set_lr_scale(x, lr_scales[-1]))
+
+        for k, p in self.named_parameters():
+            p.param_name = k
+
+        def _check_lr_scale(m):
+            for p in m.parameters():
+                assert hasattr(p, "lr_scale"), p.param_name
+
+        self.apply(_check_lr_scale)
+
+    @torch.jit.ignore
+    def no_weight_decay_keywords(self):
+        return {"attention_biases"}
+
+    def forward_features(self, x):
+        # x: (N, C, H, W)
+        x = self.patch_embed(x)
+
+        x = self.layers[0](x)
+        start_i = 1
+
+        for i in range(start_i, len(self.layers)):
+            layer = self.layers[i]
+            x = layer(x)
+        B, _, C = x.size()
+        x = x.view(B, 64, 64, C)
+        x = x.permute(0, 3, 1, 2)
+        x = self.neck(x)
+        return x
+
+    def forward(self, x):
+        x = self.forward_features(x)
+        # x = self.norm_head(x)
+        # x = self.head(x)
+        return x
+
+
+def test_tiny_vit():
+    tiny_vit = TinyViT(
+        img_size=1024,
+        embed_dims=[64, 128, 160, 320],
+        depths=[2, 2, 6, 2],
+        num_heads=[2, 4, 5, 10],
+        window_sizes=[7, 7, 14, 7],
+    )
+    state = workbench.randomize(tiny_vit.state_dict())
+    tiny_vit.load_state_dict(state)
+    tiny_vit.eval()
+
+    x = torch.rand(1, 3, 1024, 1024)
+    expected = tiny_vit(x)
+
+    # !! running out of memory when using default resolution on workbench
+
+    # add_variance_epsilon(state)
+    # result = torch.zeros_like(expected).contiguous()
+    # workbench.invoke_test("tiny_vit", x, result, state)
+
+    # assert torch.allclose(result, expected, rtol=0.001, atol=0.02)

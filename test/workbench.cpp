@@ -78,32 +78,38 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
     try {
         auto name = std::string_view(testcase);
         auto w = dlimg::Workbench(input_count, inputs, output);
+        Tensor input = w.model.weights("input");
 
         if (name == "conv_2d_depth_wise") {
-            w.output = conv_2d_depth_wise(w.model, w.model["input"]);
+            w.output = conv_2d_depth_wise(w.model, input);
         } else if (name == "conv_2d") {
-            w.output = conv_2d(w.model, w.model["input"]);
+            w.output = conv_2d(w.model, input);
         } else if (name == "batch_norm_2d") {
-            w.output = batch_norm_2d(w.model, w.model["input"]);
+            w.output = batch_norm_2d(w.model, input);
         } else if (name == "layer_norm") {
-            w.output = layer_norm(w.model, w.model["input"]);
+            w.output = layer_norm(w.model, input);
         } else if (name == "linear") {
-            w.output = linear(w.model, w.model["input"]);
+            w.output = linear(w.model, input);
         } else if (name == "conv_2d_batch_norm") {
-            w.output = conv_2d_batch_norm(w.model, w.model["input"], 2, 1);
+            w.output = conv_2d_batch_norm(w.model, input, 2, 1);
+        } else if (name == "layer_norm_2d") {
+            w.output = layer_norm_2d(w.model, input);
         } else if (name == "patch_embed") {
-            w.output = patch_embed(w.model, w.model["input"]);
+            w.output = patch_embed(w.model, input);
         } else if (name == "mb_conv") {
-            w.output = mb_conv(w.model, w.model["input"]);
+            w.output = mb_conv(w.model, input);
         } else if (name == "patch_merging") {
-            w.output = patch_merging(w.model, w.model["input"], 64);
+            w.output = patch_merging(w.model, input, 64);
         } else if (name == "mlp") {
-            w.output = mlp(w.model, w.model["input"]);
+            w.output = mlp(w.model, input);
         } else if (name == "attention") {
-            w.output = attention(w.model, w.model["input"], 4, 2);
+            w.output = attention(w.model, input, 4, 2);
         } else if (name == "tiny_vit_block") {
-            w.output = tiny_vit_block(w.model, w.model["input"], 8, /*dim*/ 4, /*num_heads*/ 2,
+            w.output = tiny_vit_block(w.model, input, 8, /*dim*/ 4, /*num_heads*/ 2,
                                       /*window_size*/ 5);
+        } else if (name == "tiny_vit") {
+            TinyViTParams p;
+            w.output = tiny_vit(w.model, input, p);
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }

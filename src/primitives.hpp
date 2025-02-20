@@ -9,7 +9,7 @@
 namespace dlimg {
 
 inline Tensor linear(Model m, Tensor x) {
-    x = ggml_mul_mat(m, m["weight"], x);
+    x = ggml_mul_mat(m, m.weights("weight"), x);
     if (Tensor bias = m.find("bias")) {
         x = ggml_add_inplace(m, x, bias);
     }
@@ -17,7 +17,7 @@ inline Tensor linear(Model m, Tensor x) {
 }
 
 inline Tensor conv_2d(Model m, Tensor x, int stride = 1, int pad = 0, int dilation = 1) {
-    x = ggml_conv_2d(m, m["weight"], x, stride, stride, pad, pad, dilation, dilation);
+    x = ggml_conv_2d(m, m.weights("weight"), x, stride, stride, pad, pad, dilation, dilation);
     if (Tensor bias = m.find("bias")) {
         bias = ggml_reshape_4d(m, bias, 1, 1, bias->ne[0], 1);
         x = ggml_add_inplace(m, x, bias);
@@ -26,8 +26,8 @@ inline Tensor conv_2d(Model m, Tensor x, int stride = 1, int pad = 0, int dilati
 }
 
 inline Tensor conv_2d_depth_wise(Model m, Tensor x, int stride = 1, int pad = 0, int dilation = 1) {
-    auto ctx = m.context;
-    auto a = m["weight"];
+    auto ctx = m.graph_context;
+    auto a = m.weights("weight");
     auto b = x;
     int s0 = stride;
     int s1 = stride;
@@ -56,16 +56,16 @@ inline Tensor conv_2d_depth_wise(Model m, Tensor x, int stride = 1, int pad = 0,
 
 inline Tensor layer_norm(Model m, Tensor x, float eps = 1e-5f) {
     x = ggml_norm(m, x, eps);
-    x = ggml_mul_inplace(m, x, m["weight"]);
-    x = ggml_add_inplace(m, x, m["bias"]);
+    x = ggml_mul_inplace(m, x, m.weights("weight"));
+    x = ggml_add_inplace(m, x, m.weights("bias"));
     return x;
 }
 
 inline Tensor batch_norm_2d(Model m, Tensor x, float eps = 1e-5f) {
-    Tensor var = m["running_var"];
-    Tensor mean = m["running_mean"];
-    Tensor weight = m["weight"];
-    Tensor bias = m["bias"];
+    Tensor var = m.weights("running_var");
+    Tensor mean = m.weights("running_mean");
+    Tensor weight = m.weights("weight");
+    Tensor bias = m.weights("bias");
 
     var = ggml_sqrt(m, var);
     var = ggml_reshape_4d(m, var, 1, 1, var->ne[0], 1);
