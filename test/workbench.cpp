@@ -38,31 +38,28 @@ struct Workbench {
                                   ggml_tensor_overhead() * (input_count + 1) +
                                   ggml_graph_overhead() + 2048 * ggml_tensor_overhead();
         context_params.no_alloc = true;
-        context = ggml_init(context_params);
-        model = Model{context};
+        model.model_context = model.graph_context = ggml_init(context_params);
 
         for (int i = 0; i < input_count; ++i) {
             auto& raw = inputs_raw[i];
             model.create_tensor(raw.name, {raw.n, raw.c, raw.h, raw.w},
                                 std::span(raw.data, raw.size()));
         }
-        ggml_set_no_alloc(context, false);
-        graph = ggml_new_graph(context);
+        ggml_set_no_alloc(model, false);
+        model.graph = ggml_new_graph(model);
     }
 
     void run(RawTensor* output_raw) {
         GGML_ASSERT(output_raw->size_bytes() == ggml_nbytes(output));
-        output = ggml_cont(context, output);
+        output = ggml_cont(model, output);
 
-        ggml_build_forward_expand(graph, output);
-        ggml_graph_compute_with_ctx(context, graph, 1);
+        ggml_build_forward_expand(model.graph, output);
+        ggml_graph_compute_with_ctx(model, model.graph, 1);
         memcpy(output_raw->data, output->data, ggml_nbytes(output));
     }
 
-    ggml_context* context;
-    ggml_tensor* output;
-    ggml_cgraph* graph;
     Model model;
+    ggml_tensor* output;
 };
 
 } // namespace dlimg
@@ -110,6 +107,20 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
         } else if (name == "tiny_vit") {
             TinyViTParams p;
             w.output = tiny_vit(w.model, input, p);
+        } else if (name == "position_embedding_random") {
+            float* input_data = reinterpret_cast<float*>(input->data);
+            for (int i = 0; i < ggml_nelements(input); ++i) {
+                input_data[i] = (input_data[i] / 64.f) * 2.f - 1.f;
+            }
+            w.output = position_embedding_random(w.model, input);
+        } else if (name == "embed_points") {
+            float* input_data = reinterpret_cast<float*>(input->data);
+            for (int i = 0; i < ggml_nelements(input) - 2; ++i) {
+                input_data[i] = transform_point_coord(input_data[i], 64);
+            }
+            w.output = embed_points(w.model, input);
+        } else if (name == "no_mask_embed") {
+            w.output = no_mask_embed(w.model, 8);
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }

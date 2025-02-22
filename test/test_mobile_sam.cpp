@@ -81,16 +81,21 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
     graph_ctx_params.no_alloc = true;
     ggml_context* graph_ctx = ggml_init(graph_ctx_params);
 
-    Model model{model_ctx, graph_ctx};
-
     ggml_cgraph* graph = ggml_new_graph(graph_ctx);
+
+    Model model{model_ctx, graph_ctx, graph};
 
     {
         ggml_tensor* x = ggml_new_tensor_4d(graph_ctx, GGML_TYPE_F32, 1024, 1024, 3, 1);
         ggml_set_name(x, "input");
 
+        ggml_tensor* point_coords = ggml_new_tensor_2d(graph_ctx, GGML_TYPE_F32, 1, 2);
+        ggml_set_name(point_coords, "point_coords");
+
         Tensor image_embeddings = tiny_vit(model["enc"], x, TinyViTParams{});
         ggml_set_name(image_embeddings, "image_embeddings");
+
+        auto prompt_embeddings = encode_prompt(model["prompt_encoder"], point_coords);
 
         ggml_build_forward_expand(graph, image_embeddings);
 
@@ -102,6 +107,12 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
     ggml_tensor* input_image_tensor = ggml_graph_get_tensor(graph, "input");
     ggml_backend_tensor_set(input_image_tensor, image_data.data(), 0,
                             ggml_nbytes(input_image_tensor));
+
+    auto points = std::array{transform_point_coord(float(point.x)),
+                             transform_point_coord(float(point.y)), 0.f, 0.f};
+
+    ggml_tensor* point_coords = ggml_graph_get_tensor(graph, "point_coords");
+    ggml_backend_tensor_set(point_coords, points.data(), 0, ggml_nbytes(point_coords));
 
     ggml_backend_graph_compute(backend, graph);
 

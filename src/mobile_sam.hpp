@@ -6,6 +6,8 @@
 
 namespace dlimg {
 
+constexpr float pi = 3.14159265358979323846f;
+
 inline Tensor conv_2d_batch_norm(Model m, Tensor x, int stride = 1, int pad = 0, int dilation = 1,
                                  int groups = 1) {
     if (groups == 1) {
@@ -64,10 +66,6 @@ inline Tensor patch_merging(Model m, Tensor x, int input_resolution) {
 
     int out_c = m.weights("conv2.c.weight")->ne[3];
     int stride = (out_c == 320 || out_c == 448 || out_c == 576) ? 1 : 2;
-
-    fmt::print("patch merging, resolution: {}, stride: {}, out_c: {}\n", input_resolution, stride,
-               out_c);
-
     x = conv_2d_batch_norm(m["conv2"], x, stride, 1, 1, out_c);
     x = ggml_gelu_inplace(m, x);
 
@@ -251,6 +249,67 @@ inline std::vector<float> preprocess_image(char const* filepath) {
             }
         }
     }
+    return result;
+}
+
+//
+// Prompt encoder
+//
+
+inline float transform_point_coord(int p, int image_size = 1024) {
+    float center_normalized = (float(p) + 0.5f) / float(image_size);
+    return 2.f * center_normalized - 1.f;
+}
+
+inline Tensor position_embedding_random(Model m, Tensor coords) {
+    Tensor pe = m.weights("positional_encoding_gaussian_matrix");
+    pe = ggml_cont(m, ggml_transpose(m, pe));
+    coords = ggml_mul_mat(m, pe, coords);
+    coords = ggml_scale_inplace(m, coords, 2.f * pi);
+    Tensor coords_sin = ggml_sin(m, coords);
+    Tensor coords_cos = ggml_cos(m, coords);
+    return ggml_concat(m, coords_sin, coords_cos, 0);
+}
+
+inline Tensor embed_points(Model m, Tensor coords) {
+    int64_t count = coords->ne[1] - 1; // last element is sentinel
+    Tensor x = position_embedding_random(m["pe_layer"], coords);
+
+    // Write "not_a_point_embed" value into the last coordinate
+    Tensor label_end = ggml_view_2d(m, x, x->ne[0], 1, x->nb[1], /*offset*/ count * x->nb[1]);
+    label_end = ggml_cpy(m, m.weights("not_a_point_embed.weight"), label_end);
+    ggml_build_forward_expand(m.graph, label_end);
+
+    // Add point_embeddings[1] weight to all foreground points (prior coordinates)
+    Tensor label_one = ggml_view_2d(m, x, x->ne[0], count, x->nb[1], /* offset */ 0);
+    label_one = ggml_add_inplace(m, label_one, m.weights("point_embeddings.1.weight"));
+    ggml_build_forward_expand(m.graph, label_one);
+
+    // NOTE: background points are not handled
+    return x;
+}
+
+inline Tensor no_mask_embed(Model m, int embedding_size) {
+    Tensor dense = m.weights("no_mask_embed.weight");
+    dense = ggml_reshape_4d(m, dense, 1, 1, dense->ne[0], 1);
+    dense = ggml_repeat(
+        m, dense,
+        ggml_new_tensor_4d(m, GGML_TYPE_F32, embedding_size, embedding_size, dense->ne[2], 1));
+    return dense;
+}
+
+struct EncodePromptResult {
+    Tensor sparse;
+    Tensor dense;
+};
+
+inline EncodePromptResult encode_prompt(Model m, Tensor point_coords) {
+    int image_size = 1024;
+    int image_embedding_size = image_size / 16;
+
+    EncodePromptResult result;
+    result.sparse = embed_points(m, point_coords);
+    result.dense = no_mask_embed(m, image_embedding_size);
     return result;
 }
 

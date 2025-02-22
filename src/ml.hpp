@@ -15,12 +15,13 @@ using Shape4 = std::array<int64_t, 4>;
 struct Model {
     ggml_context* model_context = nullptr;
     ggml_context* graph_context = nullptr;
+    ggml_cgraph* graph = nullptr;
     TensorName prefix;
 
     Model() = default;
 
     explicit Model(ggml_context* model_context, ggml_context* graph_context = nullptr,
-                   TensorName prefix = {})
+                   ggml_cgraph* graph = nullptr, TensorName prefix = {})
         : model_context(model_context),
           graph_context(graph_context ? graph_context : model_context),
           prefix(prefix) {}
@@ -40,17 +41,20 @@ struct Model {
         throw std::runtime_error(fmt::format("Tensor not found: {}.{}", prefix.view(), name));
     }
 
+    Model with_prefix(TensorName prefix) const {
+        return Model{model_context, graph_context, graph, prefix};
+    }
+
     Model operator[](char const* sub_module) const {
         auto new_prefix = TensorName(sub_module);
         if (prefix) {
-            new_prefix = TensorName().format("{}.{}", prefix.c_str(), sub_module);
+            new_prefix.format("{}.{}", prefix.c_str(), sub_module);
         }
-        return Model{model_context, graph_context, new_prefix};
+        return with_prefix(new_prefix);
     }
 
     Model operator[](int index) const {
-        auto new_prefix = TensorName("{}.{}", prefix.view(), index);
-        return Model{model_context, graph_context, new_prefix};
+        return with_prefix(TensorName("{}.{}", prefix.view(), index));
     }
 
     void add_tensor(char const* name, Tensor tensor) const {
