@@ -32,9 +32,9 @@ struct RawTensor {
 
 struct Workbench {
 
-    Workbench(int input_count, RawTensor* inputs_raw, RawTensor* output_raw) {
+    Workbench(int input_count, RawTensor* inputs_raw, RawTensor const& output_raw) {
         auto context_params = ggml_init_params{};
-        context_params.mem_size = 48 * output_raw->size_bytes() +
+        context_params.mem_size = 48 * output_raw.size_bytes() +
                                   ggml_tensor_overhead() * (input_count + 1) +
                                   ggml_graph_overhead() + 2048 * ggml_tensor_overhead();
         context_params.no_alloc = true;
@@ -49,17 +49,23 @@ struct Workbench {
         model.graph = ggml_new_graph(model);
     }
 
-    void run(RawTensor* output_raw) {
-        GGML_ASSERT(output_raw->size_bytes() == ggml_nbytes(output));
-        output = ggml_cont(model, output);
+    void output(Tensor tensor, RawTensor dest) {
+        GGML_ASSERT(dest.size_bytes() == ggml_nbytes(tensor));
 
-        ggml_build_forward_expand(model.graph, output);
+        Tensor out = ggml_cont(model, tensor);
+        ggml_build_forward_expand(model.graph, out);
+        outputs.emplace_back(out, dest);
+    }
+
+    void run() {
         ggml_graph_compute_with_ctx(model, model.graph, 1);
-        memcpy(output_raw->data, output->data, ggml_nbytes(output));
+        for (auto& [output, output_raw] : outputs) {
+            memcpy(output_raw.data, ggml_get_data_f32(output), ggml_nbytes(output));
+        }
     }
 
     Model model;
-    ggml_tensor* output;
+    std::vector<std::tuple<Tensor, RawTensor>> outputs;
 };
 
 } // namespace dlimg
@@ -69,7 +75,7 @@ extern "C" {
 #endif
 
 API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTensor* inputs,
-                            dlimg::RawTensor* output) {
+                            dlimg::RawTensor const& output) {
     using namespace dlimg;
 
     try {
@@ -78,54 +84,78 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
         Tensor input = w.model.weights("input");
 
         if (name == "conv_2d_depth_wise") {
-            w.output = conv_2d_depth_wise(w.model, input);
+            w.output(conv_2d_depth_wise(w.model, input), output);
         } else if (name == "conv_2d") {
-            w.output = conv_2d(w.model, input);
+            w.output(conv_2d(w.model, input), output);
         } else if (name == "batch_norm_2d") {
-            w.output = batch_norm_2d(w.model, input);
+            w.output(batch_norm_2d(w.model, input), output);
         } else if (name == "layer_norm") {
-            w.output = layer_norm(w.model, input);
+            w.output(layer_norm(w.model, input), output);
         } else if (name == "linear") {
-            w.output = linear(w.model, input);
+            w.output(linear(w.model, input), output);
         } else if (name == "conv_2d_batch_norm") {
-            w.output = conv_2d_batch_norm(w.model, input, 2, 1);
+            w.output(conv_2d_batch_norm(w.model, input, 2, 1), output);
         } else if (name == "layer_norm_2d") {
-            w.output = layer_norm_2d(w.model, input);
+            w.output(layer_norm_2d(w.model, input), output);
         } else if (name == "patch_embed") {
-            w.output = patch_embed(w.model, input);
+            w.output(patch_embed(w.model, input), output);
         } else if (name == "mb_conv") {
-            w.output = mb_conv(w.model, input);
+            w.output(mb_conv(w.model, input), output);
         } else if (name == "patch_merging") {
-            w.output = patch_merging(w.model, input, 64);
+            w.output(patch_merging(w.model, input, 64), output);
         } else if (name == "mlp") {
-            w.output = mlp(w.model, input);
-        } else if (name == "attention") {
-            w.output = attention(w.model, input, 4, 2);
+            w.output(mlp(w.model, input), output);
+        } else if (name == "attention_rel_bias") {
+            w.output(attention_rel_bias(w.model, input, 4, 2), output);
         } else if (name == "tiny_vit_block") {
-            w.output = tiny_vit_block(w.model, input, 8, /*dim*/ 4, /*num_heads*/ 2,
-                                      /*window_size*/ 5);
+            w.output(tiny_vit_block(w.model, input, 8, /*dim*/ 4, /*num_heads*/ 2,
+                                    /*window_size*/ 5),
+                     output);
         } else if (name == "tiny_vit") {
             TinyViTParams p;
-            w.output = tiny_vit(w.model, input, p);
+            w.output(tiny_vit(w.model, input, p), output);
         } else if (name == "position_embedding_random") {
             float* input_data = reinterpret_cast<float*>(input->data);
             for (int i = 0; i < ggml_nelements(input); ++i) {
                 input_data[i] = (input_data[i] / 64.f) * 2.f - 1.f;
             }
-            w.output = position_embedding_random(w.model, input);
+            w.output(position_embedding_random(w.model, input), output);
         } else if (name == "embed_points") {
             float* input_data = reinterpret_cast<float*>(input->data);
             for (int i = 0; i < ggml_nelements(input) - 2; ++i) {
                 input_data[i] = transform_point_coord(input_data[i], 64);
             }
-            w.output = embed_points(w.model, input);
+            w.output(embed_points(w.model, input), output);
         } else if (name == "no_mask_embed") {
-            w.output = no_mask_embed(w.model, 8);
+            w.output(no_mask_embed(w.model, 8), output);
+        } else if (name == "attention") {
+            Tensor q = input;
+            Tensor k = w.model.weights("input_k");
+            Tensor v = w.model.weights("input_v");
+            w.output(attention(w.model, q, k, v, 2), output);
+        } else if (name.starts_with("two_way_attention_block")) {
+            Tensor queries = input;
+            Tensor keys = w.model.weights("input_keys");
+            Tensor query_pe = w.model.weights("input_query_pe");
+            Tensor key_pe = w.model.weights("input_key_pe");
+            bool skip_first_layer_pe = name.ends_with("skip_first_layer_pe");
+            auto [result_queries, result_keys] = two_way_attention_block(
+                w.model, queries, keys, query_pe, key_pe, 2, skip_first_layer_pe);
+            w.output(result_queries, output);
+            w.output(result_keys, inputs[input_count - 1]);
+        } else if (name == "two_way_transformer") {
+            Tensor image_embedding = input;
+            Tensor image_pe = w.model.weights("input_image_pe");
+            Tensor point_embedding = w.model.weights("input_point_embedding");
+            auto [result_queries, result_keys] =
+                two_way_transformer(w.model, image_embedding, image_pe, point_embedding, 2, 2);
+            w.output(result_queries, output);
+            w.output(result_keys, inputs[input_count - 1]);
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }
 
-        w.run(output);
+        w.run();
 
     } catch (std::exception const& e) {
         fprintf(stderr, "Error: %s\n", e.what());

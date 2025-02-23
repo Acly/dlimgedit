@@ -4,6 +4,7 @@
 import itertools
 import sys
 import torch
+import numpy as np
 from pathlib import Path
 
 import gguf
@@ -22,6 +23,26 @@ def build_attention_bias_indices(resolution: int):
             idxs.append(attention_offsets[offset])
 
     return torch.LongTensor(idxs).view(N, N)
+
+
+def build_dense_positional_embeddings(image_embedding_size=64, num_pos_feats=64):
+    # from sam/modeling/prompt_encoder.py - PositionEmbeddingRandom
+    h, w = image_embedding_size, image_embedding_size
+    grid = torch.ones((h, w), dtype=torch.float32)
+    y_embed = grid.cumsum(dim=0) - 0.5
+    x_embed = grid.cumsum(dim=1) - 0.5
+    y_embed = y_embed / h
+    x_embed = x_embed / w
+
+    positional_encoding_gaussian_matrix = torch.randn((2, num_pos_feats))
+
+    coords = torch.stack((y_embed, x_embed), dim=-1)
+    coords = 2 * coords - 1
+    coords = coords @ positional_encoding_gaussian_matrix
+    coords = 2 * np.pi * coords
+    # outputs d_1 x ... x d_n x C shape
+    pe = torch.cat([torch.sin(coords), torch.cos(coords)], dim=-1)
+    return pe.permute(2, 0, 1)
 
 
 if len(sys.argv) < 3:
@@ -62,6 +83,10 @@ for name, tensor in model.items():
     tensor_data = tensor.numpy()
     print(name, tensor.shape, tensor_data.dtype)
     writer.add_tensor(name, tensor_data)
+
+writer.add_tensor(
+    "prompt_encoder.dense_positional_embedding", build_dense_positional_embeddings()
+)
 
 writer.write_header_to_file()
 writer.write_kv_data_to_file()

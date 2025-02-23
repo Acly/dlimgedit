@@ -1,6 +1,9 @@
 import itertools
 import torch
 import numpy as np
+import math
+import pytest
+from torch import Tensor
 
 from . import workbench
 
@@ -274,7 +277,7 @@ def test_mlp():
     assert torch.allclose(result, expected, rtol=0.001, atol=0.02)
 
 
-class Attention(torch.nn.Module):
+class AttentionRelBias(torch.nn.Module):
     def __init__(
         self,
         dim,
@@ -358,8 +361,8 @@ class Attention(torch.nn.Module):
         return x
 
 
-def test_attention():
-    attention = Attention(4, 2, num_heads=2, attn_ratio=1, resolution=(3, 3))
+def test_attention_rel_bias():
+    attention = AttentionRelBias(4, 2, num_heads=2, attn_ratio=1, resolution=(3, 3))
     state = workbench.randomize(attention.state_dict())
     attention.load_state_dict(state)
     attention.eval()
@@ -371,7 +374,7 @@ def test_attention():
         :, attention.attention_bias_idxs
     ]
     result = torch.zeros_like(expected).contiguous()
-    workbench.invoke_test("attention", x, result, state)
+    workbench.invoke_test("attention_rel_bias", x, result, state)
 
     assert torch.allclose(result, expected, atol=0.001)
 
@@ -403,7 +406,7 @@ class TinyViTBlock(torch.nn.Module):
         head_dim = dim // num_heads
 
         window_resolution = (window_size, window_size)
-        self.attn = Attention(
+        self.attn = AttentionRelBias(
             dim, head_dim, num_heads, attn_ratio=1, resolution=window_resolution
         )
 
@@ -974,3 +977,295 @@ def test_prompt_encoder_points():
     workbench.invoke_test("no_mask_embed", points, result_dense, state)
 
     assert torch.allclose(result_dense, expected_dense)
+
+
+#
+# Mask Decoder
+#
+
+
+class Attention(torch.nn.Module):
+    def __init__(
+        self,
+        embedding_dim: int,
+        num_heads: int,
+        downsample_rate: int = 1,
+    ) -> None:
+        super().__init__()
+        self.embedding_dim = embedding_dim
+        self.internal_dim = embedding_dim // downsample_rate
+        self.num_heads = num_heads
+        assert (
+            self.internal_dim % num_heads == 0
+        ), "num_heads must divide embedding_dim."
+
+        self.q_proj = torch.nn.Linear(embedding_dim, self.internal_dim)
+        self.k_proj = torch.nn.Linear(embedding_dim, self.internal_dim)
+        self.v_proj = torch.nn.Linear(embedding_dim, self.internal_dim)
+        self.out_proj = torch.nn.Linear(self.internal_dim, embedding_dim)
+
+    def _separate_heads(self, x: Tensor, num_heads: int) -> Tensor:
+        b, n, c = x.shape
+        x = x.reshape(b, n, num_heads, c // num_heads)
+        return x.transpose(1, 2)  # B x N_heads x N_tokens x C_per_head
+
+    def _recombine_heads(self, x: Tensor) -> Tensor:
+        b, n_heads, n_tokens, c_per_head = x.shape
+        x = x.transpose(1, 2)
+        return x.reshape(b, n_tokens, n_heads * c_per_head)  # B x N_tokens x C
+
+    def forward(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+        # Input projections
+        q = self.q_proj(q)
+        k = self.k_proj(k)
+        v = self.v_proj(v)
+
+        # Separate into heads
+        q = self._separate_heads(q, self.num_heads)
+        k = self._separate_heads(k, self.num_heads)
+        v = self._separate_heads(v, self.num_heads)
+
+        # Attention
+        _, _, _, c_per_head = q.shape
+        attn = q @ k.permute(0, 1, 3, 2)  # B x N_heads x N_tokens x N_tokens
+        attn = attn / math.sqrt(c_per_head)
+        attn = torch.softmax(attn, dim=-1)
+
+        # Get output
+        out = attn @ v
+        out = self._recombine_heads(out)
+        out = self.out_proj(out)
+
+        return out
+
+
+def test_attention():
+    attention = Attention(4, 2, downsample_rate=2)
+    state = workbench.randomize(attention.state_dict())
+    attention.load_state_dict(state)
+    attention.eval()
+
+    q = torch.rand(1, 8, 4)
+    k = torch.rand(1, 8, 4)
+    v = torch.rand(1, 8, 4)
+    expected = attention(q, k, v)
+
+    result = torch.zeros_like(expected).contiguous()
+    state["input_k"] = k
+    state["input_v"] = v
+    workbench.invoke_test("attention", q, result, state)
+
+    assert torch.allclose(result, expected)
+
+
+class MLPBlock(torch.nn.Module):
+    def __init__(
+        self,
+        embedding_dim: int,
+        mlp_dim: int,
+        act=torch.nn.GELU,
+    ) -> None:
+        super().__init__()
+        self.lin1 = torch.nn.Linear(embedding_dim, mlp_dim)
+        self.lin2 = torch.nn.Linear(mlp_dim, embedding_dim)
+        self.act = act()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.lin2(self.act(self.lin1(x)))
+
+
+class TwoWayAttentionBlock(torch.nn.Module):
+    def __init__(
+        self,
+        embedding_dim: int,
+        num_heads: int,
+        mlp_dim: int = 2048,
+        activation=torch.nn.ReLU,
+        attention_downsample_rate: int = 2,
+        skip_first_layer_pe: bool = False,
+    ) -> None:
+        super().__init__()
+        self.self_attn = Attention(embedding_dim, num_heads)
+        self.norm1 = torch.nn.LayerNorm(embedding_dim)
+
+        self.cross_attn_token_to_image = Attention(
+            embedding_dim, num_heads, downsample_rate=attention_downsample_rate
+        )
+        self.norm2 = torch.nn.LayerNorm(embedding_dim)
+
+        self.mlp = MLPBlock(embedding_dim, mlp_dim, activation)
+        self.norm3 = torch.nn.LayerNorm(embedding_dim)
+
+        self.norm4 = torch.nn.LayerNorm(embedding_dim)
+        self.cross_attn_image_to_token = Attention(
+            embedding_dim, num_heads, downsample_rate=attention_downsample_rate
+        )
+
+        self.skip_first_layer_pe = skip_first_layer_pe
+
+    def forward(self, queries: Tensor, keys: Tensor, query_pe: Tensor, key_pe: Tensor):
+        # Self attention block
+        if self.skip_first_layer_pe:
+            queries = self.self_attn(q=queries, k=queries, v=queries)
+        else:
+            q = queries + query_pe
+            attn_out = self.self_attn(q=q, k=q, v=queries)
+            queries = queries + attn_out
+        queries = self.norm1(queries)
+
+        # Cross attention block, tokens attending to image embedding
+        q = queries + query_pe
+        k = keys + key_pe
+        attn_out = self.cross_attn_token_to_image(q=q, k=k, v=keys)
+        queries = queries + attn_out
+        queries = self.norm2(queries)
+
+        # MLP block
+        mlp_out = self.mlp(queries)
+        queries = queries + mlp_out
+        queries = self.norm3(queries)
+
+        # Cross attention block, image embedding attending to tokens
+        q = queries + query_pe
+        k = keys + key_pe
+        attn_out = self.cross_attn_image_to_token(q=k, k=q, v=queries)
+        keys = keys + attn_out
+        keys = self.norm4(keys)
+
+        return queries, keys
+
+
+@pytest.mark.parametrize("mode", ["skip_first_layer_pe", "default"])
+def test_two_way_attention_block(mode):
+
+    torch.manual_seed(330896961738400)
+
+    two_way_attention = TwoWayAttentionBlock(
+        4, num_heads=2, mlp_dim=16, skip_first_layer_pe=(mode == "skip_first_layer_pe")
+    )
+    state = workbench.randomize(two_way_attention.state_dict())
+    two_way_attention.load_state_dict(state)
+    two_way_attention.eval()
+
+    queries = torch.rand(1, 8, 4)
+    keys = torch.rand(1, 8, 4)
+    query_pe = torch.rand(1, 8, 4)
+    key_pe = torch.rand(1, 8, 4)
+    expected_queries, expected_keys = two_way_attention(queries, keys, query_pe, key_pe)
+
+    state = {
+        k.replace("token_to_image", "t2i").replace("image_to_token", "i2t"): v
+        for k, v in state.items()
+    }
+    state["input_keys"] = keys
+    state["input_query_pe"] = query_pe
+    state["input_key_pe"] = key_pe
+    state["result_keys"] = torch.zeros_like(expected_keys).contiguous()
+    result_queries = torch.zeros_like(expected_queries).contiguous()
+    workbench.invoke_test(
+        f"two_way_attention_block_{mode}", queries, result_queries, state
+    )
+
+    assert torch.allclose(result_queries, expected_queries)
+    assert torch.allclose(state["result_keys"], expected_keys)
+
+
+class TwoWayTransformer(torch.nn.Module):
+    def __init__(
+        self,
+        depth: int,
+        embedding_dim: int,
+        num_heads: int,
+        mlp_dim: int,
+        activation=torch.nn.ReLU,
+        attention_downsample_rate: int = 2,
+    ):
+        super().__init__()
+        self.depth = depth
+        self.embedding_dim = embedding_dim
+        self.num_heads = num_heads
+        self.mlp_dim = mlp_dim
+        self.layers = torch.nn.ModuleList()
+
+        for i in range(depth):
+            self.layers.append(
+                TwoWayAttentionBlock(
+                    embedding_dim=embedding_dim,
+                    num_heads=num_heads,
+                    mlp_dim=mlp_dim,
+                    activation=activation,
+                    attention_downsample_rate=attention_downsample_rate,
+                    skip_first_layer_pe=(i == 0),
+                )
+            )
+
+        self.final_attn_token_to_image = Attention(
+            embedding_dim, num_heads, downsample_rate=attention_downsample_rate
+        )
+        self.norm_final_attn = torch.nn.LayerNorm(embedding_dim)
+
+    def forward(
+        self,
+        image_embedding: Tensor,
+        image_pe: Tensor,
+        point_embedding: Tensor,
+    ):
+        # BxCxHxW -> BxHWxC == B x N_image_tokens x C
+        bs, c, h, w = image_embedding.shape
+        image_embedding = image_embedding.flatten(2).permute(0, 2, 1)
+        image_pe = image_pe.flatten(2).permute(0, 2, 1)
+
+        # Prepare queries
+        queries = point_embedding
+        keys = image_embedding
+
+        # Apply transformer blocks and final layernorm
+        for layer in self.layers:
+            queries, keys = layer(
+                queries=queries,
+                keys=keys,
+                query_pe=point_embedding,
+                key_pe=image_pe,
+            )
+
+        # Apply the final attention layer from the points to the image
+        q = queries + point_embedding
+        k = keys + image_pe
+        attn_out = self.final_attn_token_to_image(q=q, k=k, v=keys)
+        queries = queries + attn_out
+        queries = self.norm_final_attn(queries)
+
+        return queries, keys
+
+
+def test_two_way_transformer():
+    two_way_transformer = TwoWayTransformer(
+        depth=2,
+        embedding_dim=4,
+        num_heads=2,
+        mlp_dim=16,
+    )
+    state = workbench.randomize(two_way_transformer.state_dict())
+    two_way_transformer.load_state_dict(state)
+    two_way_transformer.eval()
+
+    image_embedding = torch.rand(1, 4, 8, 8)
+    image_pe = torch.rand(1, 4, 8, 8)
+    point_embedding = torch.rand(1, 8, 4)
+    expected_queries, expected_keys = two_way_transformer(
+        image_embedding, image_pe, point_embedding
+    )
+
+    state = {
+        k.replace("token_to_image", "t2i").replace("image_to_token", "i2t"): v
+        for k, v in state.items()
+    }
+    state["input_image_embedding"] = image_embedding
+    state["input_image_pe"] = image_pe
+    state["input_point_embedding"] = point_embedding
+    state["result_keys"] = torch.zeros_like(expected_keys).contiguous()
+    result_queries = torch.zeros_like(expected_queries).contiguous()
+    workbench.invoke_test("two_way_transformer", image_embedding, result_queries, state)
+
+    assert torch.allclose(result_queries, expected_queries, atol=1e-6, rtol=1e-4)
+    assert torch.allclose(state["result_keys"], expected_keys, atol=1e-6, rtol=1e-4)

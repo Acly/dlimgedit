@@ -73,5 +73,6 @@ def randomize(state_dict: dict[str, torch.Tensor]):
 
 
 def print_results(result: torch.Tensor, expected: torch.Tensor):
+    print("\ntorch seed:", torch.initial_seed())
     print("\nresult -----", result, sep="\n")
     print("\nexpected ---", expected, sep="\n")
