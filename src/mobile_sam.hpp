@@ -99,8 +99,8 @@ inline Tensor attention_rel_bias(Model m, Tensor x, int dim, int num_heads) {
     // split([key_dim, key_dim, key_dim], dim=3)
     size_t offset = qkv->nb[3];
     auto split = [=](Model m, Tensor tensor, size_t index) {
-        tensor = ggml_view_3d(m, tensor, key_dim, num_heads * N, B, tensor->nb[1], tensor->nb[2],
-                              index * offset);
+        tensor = ggml_view_3d(
+            m, tensor, key_dim, num_heads * N, B, tensor->nb[1], tensor->nb[2], index * offset);
         tensor = ggml_reshape_4d(m, tensor, key_dim, num_heads, N, B);
         return tensor;
     };
@@ -405,8 +405,8 @@ inline auto two_way_transformer(Model m, Tensor image_embedding, Tensor image_pe
     Model layers = m["layers"];
     for (int i = 0; i < depth; ++i) {
         bool skip_first_layer_pe = i == 0;
-        std::tie(queries, keys) = two_way_attention_block(layers[i], queries, keys, point_embedding,
-                                                          image_pe, num_heads, skip_first_layer_pe);
+        std::tie(queries, keys) = two_way_attention_block(
+            layers[i], queries, keys, point_embedding, image_pe, num_heads, skip_first_layer_pe);
     }
 
     // Apply the final attention layer from the points to the image
@@ -419,47 +419,114 @@ inline auto two_way_transformer(Model m, Tensor image_embedding, Tensor image_pe
     return std::tuple{queries, keys};
 }
 
-inline Tensor predict_masks(Model m, Tensor image_embeddings, Tensor sparse_prompt,
-                            Tensor dense_prompt) {
+inline Tensor conv_transpose_2d(Model m, Tensor x, int stride) {
+    // TODO: ggml_conv_transpose_2d_p0 expects fp16 weights
+    Tensor weight = ggml_cast(m, m.weights("weight"), GGML_TYPE_F16);
+    Tensor bias = m.weights("bias");
+    bias = ggml_reshape_3d(m, bias, 1, 1, bias->ne[0]);
+    x = ggml_conv_transpose_2d_p0(m, weight, x, stride);
+    x = ggml_add_inplace(m, x, bias);
+    return x;
+}
+
+inline Tensor upscale_outputs(Model m, Tensor x) {
+    x = conv_transpose_2d(m[0], x, 2);
+    x = layer_norm_2d(m[1], x);
+    x = ggml_gelu_inplace(m, x);
+    x = conv_transpose_2d(m[3], x, 2);
+    x = ggml_gelu_inplace(m, x);
+    return x;
+}
+
+inline Tensor hypernetwork_mlp(Model m, Tensor x, int num_layers) {
+    Model layers = m["layers"];
+    for (int i = 0; i < num_layers; ++i) {
+        x = linear(layers[i], x);
+        if (i < num_layers - 1) {
+            x = ggml_relu_inplace(m, x);
+        }
+    }
+    return x;
+}
+
+inline Tensor slice_2d(Model m, Tensor x, int index, int dim) {
+    GGML_ASSERT(dim == 1);
+    size_t offset = index * x->nb[dim];
+    return ggml_view_2d(m, x, x->ne[0], x->ne[2], x->nb[dim], offset);
+}
+
+struct MaskPrediction {
+    Tensor masks;
+    Tensor iou;
+};
+
+inline MaskPrediction predict_masks(Model m, Tensor image_embeddings, Tensor sparse_prompt,
+                                    Tensor dense_prompt, int image_embed_size = 64) {
     const int num_heads = 8;
     const int transformer_depth = 2;
     const int num_mask_tokens = 4; // num_multimask_outputs + 1
 
     // Concatenate output tokens
     int64_t prompt_size = sparse_prompt->ne[2];
-    Tensor output_tokens =
-        ggml_concat(m, m.weights("iou_token.weight"), m.weights("mask_tokens.weight"), 0);
+    Tensor output_tokens = ggml_concat(
+        m, m.weights("iou_token.weight"), m.weights("mask_tokens.weight"), 1);
     output_tokens = ggml_repeat(m, output_tokens,
                                 ggml_new_tensor_3d(m, GGML_TYPE_F32, output_tokens->ne[0],
                                                    output_tokens->ne[1], prompt_size));
     Tensor tokens = ggml_concat(m, output_tokens, sparse_prompt, 1);
 
     // Expand per-image data in batch direction to be per-mask
-    Tensor src =
-        ggml_new_tensor_4d(m, GGML_TYPE_F32, image_embeddings->ne[0], image_embeddings->ne[1],
-                           image_embeddings->ne[2], tokens->ne[2]);
+    Tensor src = ggml_new_tensor_4d(m, GGML_TYPE_F32, image_embeddings->ne[0],
+                                    image_embeddings->ne[1], image_embeddings->ne[2],
+                                    tokens->ne[2]);
     src = ggml_repeat(m, image_embeddings, src);
     src = ggml_add_inplace(m, src, dense_prompt);
 
     Tensor image_pe = m.weights("prompt_encoder.dense_positional_embedding");
-    Tensor pos_src = ggml_new_tensor_4d(m, GGML_TYPE_F32, image_pe->ne[0], image_pe->ne[1],
-                                        image_pe->ne[2], tokens->ne[3]);
+    Tensor pos_src = ggml_new_tensor_4d(
+        m, GGML_TYPE_F32, image_pe->ne[0], image_pe->ne[1], image_pe->ne[2], tokens->ne[3]);
     pos_src = ggml_repeat(m, image_pe, pos_src);
 
-    // int b = src->ne[3];
-    // int c = src->ne[2];
-    // int h = src->ne[1];
-    // int w = src->ne[0];
+    int b = src->ne[3];
+    int c = src->ne[2];
+    int h = src->ne[1];
+    int w = src->ne[0];
 
     // Run the transformer
-    auto [hs, out] = two_way_transformer(m, src, pos_src, tokens, transformer_depth, num_heads);
-    Tensor iou_pred = ggml_view_2d(m, hs, hs->ne[0], hs->ne[2], hs->nb[2], 0);
+    auto [hs, out] = two_way_transformer(
+        m["transformer"], src, pos_src, tokens, transformer_depth, num_heads);
+    Tensor iou_token_out = ggml_view_2d(m, hs, hs->ne[0], hs->ne[2], hs->nb[2], 0);
     Tensor mask_tokens_out = ggml_view_3d(m, hs, hs->ne[0], num_mask_tokens, hs->ne[2], hs->nb[1],
                                           num_mask_tokens * hs->nb[1], /* offset */ hs->nb[1]);
 
     // Upscale mask embeddings and predict masks using the mask tokens
+    out = ggml_cont(m, ggml_transpose(m, out));
+    out = ggml_reshape_4d(m, out, w, h, c, b);
+    Tensor upscaled_embedding = upscale_outputs(m["output_upscaling"], out);
+    b = upscaled_embedding->ne[3];
+    c = upscaled_embedding->ne[2];
+    h = upscaled_embedding->ne[1];
+    w = upscaled_embedding->ne[0];
+    upscaled_embedding = ggml_reshape_3d(m, upscaled_embedding, w * h, c, b);
+    upscaled_embedding = ggml_cont(m, ggml_transpose(m, upscaled_embedding));
 
-    return mask_tokens_out;
+    Tensor hyper_in = ggml_new_tensor_3d(
+        m, GGML_TYPE_F32, image_embed_size, num_mask_tokens, mask_tokens_out->ne[2]);
+    Model mlps = m["output_hypernetworks_mlps"];
+    for (int i = 0; i < num_mask_tokens; ++i) {
+        Tensor mask_slice = slice_2d(m, mask_tokens_out, i, 1);
+        mask_slice = hypernetwork_mlp(mlps[i], mask_slice, 3);
+        Tensor dest_slice = slice_2d(m, hyper_in, i, 1);
+        dest_slice = ggml_cpy(m, mask_slice, dest_slice);
+        ggml_build_forward_expand(m.graph, dest_slice);
+    }
+    Tensor masks = ggml_mul_mat(m, upscaled_embedding, hyper_in);
+    masks = ggml_reshape_4d(m, masks, w, h, masks->ne[1], b);
+
+    // Generate mask quality predictions
+    Tensor iou_pred = hypernetwork_mlp(m["iou_prediction_head"], iou_token_out, 3);
+
+    return {masks, iou_pred};
 }
 
 } // namespace dlimg

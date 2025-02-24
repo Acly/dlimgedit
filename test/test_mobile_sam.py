@@ -1269,3 +1269,220 @@ def test_two_way_transformer():
 
     assert torch.allclose(result_queries, expected_queries, atol=1e-6, rtol=1e-4)
     assert torch.allclose(state["result_keys"], expected_keys, atol=1e-6, rtol=1e-4)
+
+
+class HypernetworkMLP(torch.nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        output_dim: int,
+        num_layers: int,
+        sigmoid_output: bool = False,
+    ):
+        super().__init__()
+        self.num_layers = num_layers
+        h = [hidden_dim] * (num_layers - 1)
+        self.layers = torch.nn.ModuleList(
+            torch.nn.Linear(n, k) for n, k in zip([input_dim] + h, h + [output_dim])
+        )
+        self.sigmoid_output = sigmoid_output
+
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            x = (
+                torch.nn.functional.relu(layer(x))
+                if i < self.num_layers - 1
+                else layer(x)
+            )
+        if self.sigmoid_output:
+            x = torch.nn.functional.sigmoid(x)
+        return x
+
+
+def test_hypernetwork_mlp():
+    hypernetwork_mlp = HypernetworkMLP(4, 8, 8, num_layers=2)
+    state = workbench.randomize(hypernetwork_mlp.state_dict())
+    hypernetwork_mlp.load_state_dict(state)
+    hypernetwork_mlp.eval()
+
+    x = torch.rand(1, 4)
+    expected = hypernetwork_mlp(x)
+
+    result = torch.zeros_like(expected).contiguous()
+    workbench.invoke_test("hypernetwork_mlp", x, result, state)
+
+    assert torch.allclose(result, expected)
+
+
+def output_upscaling(transformer_dim: int, activation=torch.nn.GELU):
+    return torch.nn.Sequential(
+        torch.nn.ConvTranspose2d(
+            transformer_dim, transformer_dim // 4, kernel_size=2, stride=2
+        ),
+        LayerNorm2d(transformer_dim // 4),
+        activation(),
+        torch.nn.ConvTranspose2d(
+            transformer_dim // 4, transformer_dim // 8, kernel_size=2, stride=2
+        ),
+        activation(),
+    )
+
+
+def test_output_upscaling():
+    upscaling = output_upscaling(transformer_dim=16)
+    state = workbench.randomize(upscaling.state_dict())
+    upscaling.load_state_dict(state)
+    upscaling.eval()
+
+    x = torch.rand(1, 16, 8, 8)
+    expected = upscaling(x)
+
+    result = torch.zeros_like(expected).contiguous()
+    workbench.invoke_test("output_upscaling", x, result, state)
+
+    assert torch.allclose(result, expected, atol=1e-4, rtol=1e-2)  # fp16 weights
+
+
+class MaskDecoder(torch.nn.Module):
+    def __init__(
+        self,
+        *,
+        transformer_dim: int,
+        transformer: torch.nn.Module,
+        num_multimask_outputs: int = 3,
+        activation=torch.nn.GELU,
+        iou_head_depth: int = 3,
+        iou_head_hidden_dim: int = 256,
+    ):
+        super().__init__()
+        self.transformer_dim = transformer_dim
+        self.transformer = transformer
+
+        self.num_multimask_outputs = num_multimask_outputs
+
+        self.iou_token = torch.nn.Embedding(1, transformer_dim)
+        self.num_mask_tokens = num_multimask_outputs + 1
+        self.mask_tokens = torch.nn.Embedding(self.num_mask_tokens, transformer_dim)
+
+        self.output_upscaling = output_upscaling(transformer_dim, activation)
+        self.output_hypernetworks_mlps = torch.nn.ModuleList(
+            [
+                HypernetworkMLP(
+                    transformer_dim, transformer_dim, transformer_dim // 8, 3
+                )
+                for i in range(self.num_mask_tokens)
+            ]
+        )
+
+        self.iou_prediction_head = HypernetworkMLP(
+            transformer_dim, iou_head_hidden_dim, self.num_mask_tokens, iou_head_depth
+        )
+
+    def forward(
+        self,
+        image_embeddings: torch.Tensor,
+        image_pe: torch.Tensor,
+        sparse_prompt_embeddings: torch.Tensor,
+        dense_prompt_embeddings: torch.Tensor,
+        multimask_output: bool,
+    ):
+        masks, iou_pred = self.predict_masks(
+            image_embeddings=image_embeddings,
+            image_pe=image_pe,
+            sparse_prompt_embeddings=sparse_prompt_embeddings,
+            dense_prompt_embeddings=dense_prompt_embeddings,
+        )
+
+        # Select the correct mask or masks for output
+        if multimask_output:
+            mask_slice = slice(1, None)
+        else:
+            mask_slice = slice(0, 1)
+        masks = masks[:, mask_slice, :, :]
+        iou_pred = iou_pred[:, mask_slice]
+
+        # Prepare output
+        return masks, iou_pred
+
+    def predict_masks(
+        self,
+        image_embeddings: torch.Tensor,
+        image_pe: torch.Tensor,
+        sparse_prompt_embeddings: torch.Tensor,
+        dense_prompt_embeddings: torch.Tensor,
+    ):
+        # Concatenate output tokens
+        output_tokens = torch.cat(
+            [self.iou_token.weight, self.mask_tokens.weight], dim=0
+        )
+        output_tokens = output_tokens.unsqueeze(0).expand(
+            sparse_prompt_embeddings.size(0), -1, -1
+        )
+        tokens = torch.cat((output_tokens, sparse_prompt_embeddings), dim=1)
+
+        # Expand per-image data in batch direction to be per-mask
+        src = torch.repeat_interleave(image_embeddings, tokens.shape[0], dim=0)
+        src = src + dense_prompt_embeddings
+        pos_src = torch.repeat_interleave(image_pe, tokens.shape[0], dim=0)
+        b, c, h, w = src.shape
+
+        # Run the transformer
+        hs, src = self.transformer(src, pos_src, tokens)
+        iou_token_out = hs[:, 0, :]
+        mask_tokens_out = hs[:, 1 : (1 + self.num_mask_tokens), :]
+
+        # Upscale mask embeddings and predict masks using the mask tokens
+        src = src.transpose(1, 2).view(b, c, h, w)
+        upscaled_embedding = self.output_upscaling(src)
+        hyper_in_list = []
+        for i in range(self.num_mask_tokens):
+            hyper_in_list.append(
+                self.output_hypernetworks_mlps[i](mask_tokens_out[:, i, :])
+            )
+        hyper_in = torch.stack(hyper_in_list, dim=1)
+        b, c, h, w = upscaled_embedding.shape
+        masks = (hyper_in @ upscaled_embedding.view(b, c, h * w)).view(b, -1, h, w)
+
+        # Generate mask quality predictions
+        iou_pred = self.iou_prediction_head(iou_token_out)
+
+        return masks, iou_pred
+
+
+def test_predict_masks():
+    decoder = MaskDecoder(
+        transformer_dim=16,
+        transformer=TwoWayTransformer(
+            depth=2,
+            embedding_dim=16,
+            num_heads=2,
+            mlp_dim=16,
+        ),
+        num_multimask_outputs=3,
+    )
+    state = workbench.randomize(decoder.state_dict())
+    decoder.load_state_dict(state)
+    decoder.eval()
+
+    image_embeddings = torch.rand(1, 16, 8, 8)
+    image_pe = torch.rand(1, 16, 8, 8)
+    sparse_prompt_embeddings = torch.rand(1, 8, 16)
+    dense_prompt_embeddings = torch.rand(1, 16, 8, 8)
+    expected_masks, iou_pred = decoder.predict_masks(
+        image_embeddings, image_pe, sparse_prompt_embeddings, dense_prompt_embeddings
+    )
+
+    state = {
+        k.replace("token_to_image", "t2i").replace("image_to_token", "i2t"): v
+        for k, v in state.items()
+    }
+    state["prompt_encoder.dense_positional_embedding"] = image_pe
+    state["input_sparse_prompt"] = sparse_prompt_embeddings
+    state["input_dense_prompt"] = dense_prompt_embeddings
+    state["result_iou_pred"] = torch.zeros_like(iou_pred).contiguous()
+    result_masks = torch.zeros_like(expected_masks).contiguous()
+    workbench.invoke_test("predict_masks", image_embeddings, result_masks, state)
+
+    assert torch.allclose(result_masks, expected_masks, atol=1e-4, rtol=1e-2)
+    assert torch.allclose(state["result_iou_pred"], iou_pred, rtol=1e-2)

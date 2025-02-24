@@ -42,8 +42,8 @@ struct Workbench {
 
         for (int i = 0; i < input_count; ++i) {
             auto& raw = inputs_raw[i];
-            model.create_tensor(raw.name, {raw.n, raw.c, raw.h, raw.w},
-                                std::span(raw.data, raw.size()));
+            model.create_tensor(
+                raw.name, {raw.n, raw.c, raw.h, raw.w}, std::span(raw.data, raw.size()));
         }
         ggml_set_no_alloc(model, false);
         model.graph = ggml_new_graph(model);
@@ -147,10 +147,22 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             Tensor image_embedding = input;
             Tensor image_pe = w.model.weights("input_image_pe");
             Tensor point_embedding = w.model.weights("input_point_embedding");
-            auto [result_queries, result_keys] =
-                two_way_transformer(w.model, image_embedding, image_pe, point_embedding, 2, 2);
+            auto [result_queries, result_keys] = two_way_transformer(
+                w.model, image_embedding, image_pe, point_embedding, 2, 2);
             w.output(result_queries, output);
             w.output(result_keys, inputs[input_count - 1]);
+        } else if (name == "hypernetwork_mlp") {
+            w.output(hypernetwork_mlp(w.model, input, 2), output);
+        } else if (name == "output_upscaling") {
+            w.output(upscale_outputs(w.model, input), output);
+        } else if (name == "predict_masks") {
+            Tensor image_embeddings = input;
+            Tensor sparse_prompt = w.model.weights("input_sparse_prompt");
+            Tensor dense_prompt = w.model.weights("input_dense_prompt");
+            auto [masks, iou] = predict_masks(
+                w.model, image_embeddings, sparse_prompt, dense_prompt, 2);
+            w.output(masks, output);
+            w.output(iou, inputs[input_count - 1]);
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }

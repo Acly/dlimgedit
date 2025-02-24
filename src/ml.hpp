@@ -46,15 +46,19 @@ struct Model {
     }
 
     Model operator[](char const* sub_module) const {
-        auto new_prefix = TensorName(sub_module);
         if (prefix) {
-            new_prefix.format("{}.{}", prefix.c_str(), sub_module);
+            return with_prefix(TensorName("{}.{}", prefix.c_str(), sub_module));
+        } else {
+            return with_prefix(TensorName(sub_module));
         }
-        return with_prefix(new_prefix);
     }
 
     Model operator[](int index) const {
-        return with_prefix(TensorName("{}.{}", prefix.view(), index));
+        if (prefix) {
+            return with_prefix(TensorName("{}.{}", prefix.view(), index));
+        } else {
+            return with_prefix(TensorName("{}", index));
+        }
     }
 
     void add_tensor(char const* name, Tensor tensor) const {
