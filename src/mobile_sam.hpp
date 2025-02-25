@@ -368,19 +368,21 @@ inline auto two_way_attention_block(Model m, Tensor queries, Tensor keys, Tensor
     Tensor q = ggml_add(m, queries, query_pe);
     Tensor k = ggml_add(m, keys, key_pe);
     Tensor attn_out = attention(m["cross_attn_t2i"], q, k, keys, num_heads);
-    queries = ggml_add_inplace(m, queries, attn_out);
+    queries = ggml_add(m, queries, attn_out); // TODO: inplace
     queries = layer_norm(m["norm2"], queries);
 
     // MLP block
     Tensor mlp_out = mlp_block(m["mlp"], queries);
-    queries = ggml_add_inplace(m, queries, mlp_out);
+    queries = ggml_add(m, queries, mlp_out); // TODO: inplace
     queries = layer_norm(m["norm3"], queries);
+
+    queries = ggml_cont(m, queries); // ????????????
 
     // Cross attention block, image embedding attending to tokens
     q = ggml_add(m, queries, query_pe);
-    k = ggml_add(m, keys, key_pe);
+    // k = ggml_add(m, keys, key_pe); // TODO: redundant, same as above
     attn_out = attention(m["cross_attn_i2t"], k, q, queries, num_heads);
-    keys = ggml_add(m, keys, attn_out);
+    keys = ggml_add_inplace(m, keys, attn_out); // TODO: inplace
     keys = layer_norm(m["norm4"], keys);
 
     return std::tuple{queries, keys};
@@ -461,7 +463,7 @@ struct MaskPrediction {
 };
 
 inline MaskPrediction predict_masks(Model m, Tensor image_embeddings, Tensor sparse_prompt,
-                                    Tensor dense_prompt, int image_embed_size = 64) {
+                                    Tensor dense_prompt, int image_embed_size = 32) {
     const int num_heads = 8;
     const int transformer_depth = 2;
     const int num_mask_tokens = 4; // num_multimask_outputs + 1
@@ -480,9 +482,9 @@ inline MaskPrediction predict_masks(Model m, Tensor image_embeddings, Tensor spa
                                     image_embeddings->ne[1], image_embeddings->ne[2],
                                     tokens->ne[2]);
     src = ggml_repeat(m, image_embeddings, src);
-    src = ggml_add_inplace(m, src, dense_prompt);
+    src = ggml_add(m, src, dense_prompt); // inplace?
 
-    Tensor image_pe = m.weights("prompt_encoder.dense_positional_embedding");
+    Tensor image_pe = m.weights("dense_positional_embedding");
     Tensor pos_src = ggml_new_tensor_4d(
         m, GGML_TYPE_F32, image_pe->ne[0], image_pe->ne[1], image_pe->ne[2], tokens->ne[3]);
     pos_src = ggml_repeat(m, image_pe, pos_src);

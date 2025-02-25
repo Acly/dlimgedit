@@ -24,6 +24,7 @@ struct Model {
                    ggml_cgraph* graph = nullptr, TensorName prefix = {})
         : model_context(model_context),
           graph_context(graph_context ? graph_context : model_context),
+          graph(graph),
           prefix(prefix) {}
 
     Tensor find(char const* name) const {
@@ -70,8 +71,8 @@ struct Model {
     }
 
     void create_tensor(char const* name, Shape4 shape, std::span<float> data) {
-        auto tensor = ggml_new_tensor_4d(model_context, GGML_TYPE_F32, shape[3], shape[2], shape[1],
-                                         shape[0]);
+        auto tensor = ggml_new_tensor_4d(
+            model_context, GGML_TYPE_F32, shape[3], shape[2], shape[1], shape[0]);
         GGML_ASSERT(ggml_nbytes(tensor) == data.size_bytes());
         tensor->data = reinterpret_cast<void*>(data.data());
         add_tensor(name, tensor);

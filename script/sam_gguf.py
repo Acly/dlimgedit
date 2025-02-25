@@ -25,7 +25,9 @@ def build_attention_bias_indices(resolution: int):
     return torch.LongTensor(idxs).view(N, N)
 
 
-def build_dense_positional_embeddings(image_embedding_size=64, num_pos_feats=64):
+def build_dense_positional_embeddings(
+    positional_encoding_gaussian_matrix: torch.Tensor, image_embedding_size=64
+):
     # from sam/modeling/prompt_encoder.py - PositionEmbeddingRandom
     h, w = image_embedding_size, image_embedding_size
     grid = torch.ones((h, w), dtype=torch.float32)
@@ -34,15 +36,14 @@ def build_dense_positional_embeddings(image_embedding_size=64, num_pos_feats=64)
     y_embed = y_embed / h
     x_embed = x_embed / w
 
-    positional_encoding_gaussian_matrix = torch.randn((2, num_pos_feats))
-
-    coords = torch.stack((y_embed, x_embed), dim=-1)
+    coords = torch.stack((x_embed, y_embed), dim=-1)
     coords = 2 * coords - 1
     coords = coords @ positional_encoding_gaussian_matrix
     coords = 2 * np.pi * coords
     # outputs d_1 x ... x d_n x C shape
     pe = torch.cat([torch.sin(coords), torch.cos(coords)], dim=-1)
-    return pe.permute(2, 0, 1)
+    pe = pe.permute(2, 0, 1)
+    return pe
 
 
 if len(sys.argv) < 3:
@@ -67,8 +68,8 @@ batch_norm_eps = 1e-5
 for name, tensor in model.items():
     name = name.replace("image_encoder.", "enc.")
     name = name.replace("mask_decoder.", "dec.")
-    name = name.replace("cross_attn_image_to_token.", "cross_attn_i2t.")
-    name = name.replace("cross_attn_token_to_image.", "cross_attn_t2i.")
+    name = name.replace("_image_to_token.", "_i2t.")
+    name = name.replace("_token_to_image.", "_t2i.")
 
     if name.endswith("attention_biases"):
         num_heads = tensor.shape[0]
@@ -80,13 +81,15 @@ for name, tensor in model.items():
     if name.endswith("running_var"):
         tensor = tensor + batch_norm_eps
 
+    # Precompute dense positional embeddings from random matrix stored in the model
+    if name == "prompt_encoder.pe_layer.positional_encoding_gaussian_matrix":
+        pe = build_dense_positional_embeddings(tensor)
+        print(pe.unsqueeze(0))
+        writer.add_tensor("dec.dense_positional_embedding", pe.numpy())
+
     tensor_data = tensor.numpy()
     print(name, tensor.shape, tensor_data.dtype)
     writer.add_tensor(name, tensor_data)
-
-writer.add_tensor(
-    "prompt_encoder.dense_positional_embedding", build_dense_positional_embeddings()
-)
 
 writer.write_header_to_file()
 writer.write_kv_data_to_file()

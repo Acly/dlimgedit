@@ -1442,7 +1442,8 @@ class MaskDecoder(torch.nn.Module):
             )
         hyper_in = torch.stack(hyper_in_list, dim=1)
         b, c, h, w = upscaled_embedding.shape
-        masks = (hyper_in @ upscaled_embedding.view(b, c, h * w)).view(b, -1, h, w)
+        masks = hyper_in @ upscaled_embedding.view(b, c, h * w)
+        masks = masks.view(b, -1, h, w)
 
         # Generate mask quality predictions
         iou_pred = self.iou_prediction_head(iou_token_out)
@@ -1477,7 +1478,7 @@ def test_predict_masks():
         k.replace("token_to_image", "t2i").replace("image_to_token", "i2t"): v
         for k, v in state.items()
     }
-    state["prompt_encoder.dense_positional_embedding"] = image_pe
+    state["dense_positional_embedding"] = image_pe
     state["input_sparse_prompt"] = sparse_prompt_embeddings
     state["input_dense_prompt"] = dense_prompt_embeddings
     state["result_iou_pred"] = torch.zeros_like(iou_pred).contiguous()
