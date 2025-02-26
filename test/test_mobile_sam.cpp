@@ -199,6 +199,15 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
     std::vector<float> mask_data(4 * n * n);
     ggml_backend_tensor_get(output_mask, mask_data.data(), 0, ggml_nbytes(output_mask));
 
+    // { // load low res masks from file
+    //     auto fd = fopen("_low_res_masks.raw", "rb");
+    //     if (!fd) {
+    //         throw std::runtime_error("Failed to open _low_res_masks.raw");
+    //     }
+    //     fread(mask_data.data(), sizeof(float), mask_data.size(), fd);
+    //     fclose(fd);
+    // }
+
     for (int i = 0; i < 4; ++i) {
         auto filepath = std::format("{}_{}.png", output_path.string(), i);
         auto data = std::span(mask_data).subspan(i * n * n, n * n);
@@ -217,8 +226,8 @@ TEST_CASE("GGML_MOBILE", "[ggml]") {
     {
         Path input_path = dlimg::test_dir() / "input" / "cat_and_hat.png";
         {
-            Path output_path = dlimg::test_dir() / "result" / "sam_ggml_cat";
-            run_sam_ggml2(model_path, input_path, dlimg::Point{136, 211}, output_path);
+            Path output_path = dlimg::test_dir() / "result" / "sam_ggml";
+            run_sam_ggml2(model_path, input_path, dlimg::Point{320, 210}, output_path);
         }
         // {
         //     Path output_path = dlimg::test_dir() / "result" / "sam_ggml_wardrobe_2.png";

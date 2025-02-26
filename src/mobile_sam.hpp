@@ -13,39 +13,6 @@ namespace sam {
 constexpr int image_size = 1024;
 constexpr int mask_size = image_size / 4;
 
-struct PixelAccessor {
-    int stride_row;
-    int stride_channel;
-    std::array<int, 3> channel_map;
-
-    PixelAccessor(ImageView image) {
-        stride_channel = count(image.channels);
-        stride_row = image.extent.width * stride_channel;
-        switch (image.channels) {
-        case Channels::bgra:
-            channel_map = {2, 1, 0};
-            break;
-        case Channels::argb:
-            channel_map = {1, 2, 3};
-            break;
-        case Channels::mask:
-            channel_map = {0, 0, 0};
-            break;
-        default:
-            channel_map = {0, 1, 2};
-            break;
-        }
-    }
-
-    uint8_t get(uint8_t const* pixels, int x, int y, int c) const {
-        return pixels[y * stride_row + x * stride_channel + channel_map[c]];
-    }
-
-    void set(uint8_t* pixels, int x, int y, int c, uint8_t value) {
-        pixels[y * stride_row + x * stride_channel + channel_map[c]] = value;
-    }
-};
-
 inline float resize_longest_side(Extent extent, int target_longest_side) {
     int longest_side = std::max(extent.width, extent.height);
     return float(target_longest_side) / float(longest_side);
@@ -97,23 +64,53 @@ inline std::array<float, 4> preprocess_prompt(Point point, Extent input_image_ex
     return std::array{x, y, 0.f, 0.f};
 }
 
+template <typename Tsrc, typename Tdst, typename Fconvert>
+void interpolate_bilinear(Tsrc const* src_pixels, Extent src_extent, int src_stride,
+                          Tdst* dst_pixels, Extent dst_extent, int dst_stride, Fconvert&& convert) {
+
+    float scale_x = float(src_extent.width) / float(dst_extent.width);
+    float scale_y = float(src_extent.height) / float(dst_extent.height);
+
+    for (int y = 0; y < dst_extent.height; ++y) {
+        for (int x = 0; x < dst_extent.width; ++x) {
+            float src_xf = std::max((x + 0.5f) * scale_x - 0.5f, 0.0f);
+            float src_yf = std::max((y + 0.5f) * scale_y - 0.5f, 0.0f);
+            int src_x0 = std::max(int(src_xf), 0);
+            int src_y0 = std::max(int(src_yf), 0);
+            int src_x1 = std::min(src_x0 + 1, src_extent.width - 1);
+            int src_y1 = std::min(src_y0 + 1, src_extent.height - 1);
+
+            float v00 = src_pixels[src_y0 * src_stride + src_x0];
+            float v01 = src_pixels[src_y0 * src_stride + src_x1];
+            float v10 = src_pixels[src_y1 * src_stride + src_x0];
+            float v11 = src_pixels[src_y1 * src_stride + src_x1];
+
+            float wx = src_xf - src_x0;
+            float wy = src_yf - src_y0;
+            float v0 = (1 - wx) * v00 + wx * v01;
+            float v1 = (1 - wx) * v10 + wx * v11;
+            float value = (1 - wy) * v0 + wy * v1;
+
+            dst_pixels[y * dst_stride + x] = convert(value);
+        }
+    }
+}
+
 inline Image postprocess_mask(std::span<float const> mask_data, Extent target_extent) {
     float scale = resize_longest_side(target_extent, image_size);
     auto scaled_extent = scale_extent(target_extent, scale);
-    auto mask = Image(scaled_extent, Channels::mask);
-    auto mask_pixel = PixelAccessor(mask);
+    auto mask = Image(target_extent, Channels::mask);
 
-    for (int y = 0; y < scaled_extent.height; ++y) {
-        for (int x = 0; x < scaled_extent.width; ++x) {
-            float value = mask_data[y / 4 * mask_size + x / 4];
-            mask_pixel.set(mask.pixels(), x, y, 0, uint8_t(value > 0.0f ? 255 : 0));
-        }
-    }
+    auto scaled = std::vector<float>(image_size * image_size);
+    auto id = [](float x) { return x; };
+    interpolate_bilinear(mask_data.data(), {mask_size, mask_size}, mask_size, scaled.data(),
+                         {image_size, image_size}, image_size, id);
 
-    if (scaled_extent == target_extent) {
-        return mask;
-    }
-    return resize(mask, target_extent);
+    auto threshold = [](float x) { return uint8_t(x > 0.0f ? 255 : 0); };
+    interpolate_bilinear(scaled.data(), scaled_extent, image_size, mask.pixels(), target_extent,
+                         target_extent.width, threshold);
+
+    return mask;
 }
 
 inline Tensor conv_2d_batch_norm(Model m, Tensor x, int stride = 1, int pad = 0, int dilation = 1,
@@ -580,7 +577,8 @@ inline MaskPrediction predict_masks(Model m, Tensor image_embeddings, Tensor spa
         m["transformer"], src, pos_src, tokens, transformer_depth, num_heads);
     Tensor iou_token_out = ggml_view_2d(m, hs, hs->ne[0], hs->ne[2], hs->nb[2], 0);
     Tensor mask_tokens_out = ggml_view_3d(m, hs, hs->ne[0], num_mask_tokens, hs->ne[2], hs->nb[1],
-                                          num_mask_tokens * hs->nb[1], /* offset */ hs->nb[1]);
+                                          num_mask_tokens * hs->nb[1],
+                                          /* offset */ hs->nb[1]);
 
     // Upscale mask embeddings and predict masks using the mask tokens
     out = ggml_cont(m, ggml_transpose(m, out));

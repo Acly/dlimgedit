@@ -9,8 +9,8 @@
 namespace dlimg {
 
 uint8_t* load_image(char const* filepath, Extent* out_extent, int* out_channels) {
-    auto const pixels =
-        stbi_load(filepath, &out_extent->width, &out_extent->height, out_channels, 0);
+    auto const pixels = stbi_load(
+        filepath, &out_extent->width, &out_extent->height, out_channels, 0);
     if (!pixels) {
         throw Exception(
             fmt::format("Failed to load image {}: {}", filepath, stbi_failure_reason()));
