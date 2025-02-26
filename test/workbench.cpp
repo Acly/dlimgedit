@@ -77,6 +77,7 @@ extern "C" {
 API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTensor* inputs,
                             dlimg::RawTensor const& output) {
     using namespace dlimg;
+    using namespace dlimg::sam;
 
     try {
         auto name = std::string_view(testcase);
@@ -123,7 +124,7 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
         } else if (name == "embed_points") {
             float* input_data = reinterpret_cast<float*>(input->data);
             for (int i = 0; i < ggml_nelements(input) - 2; ++i) {
-                input_data[i] = transform_point_coord(input_data[i], 64);
+                input_data[i] = transform_coord(input_data[i], 1.0f, 64);
             }
             w.output(embed_points(w.model, input), output);
         } else if (name == "no_mask_embed") {

@@ -8,6 +8,114 @@ namespace dlimg {
 
 constexpr float pi = 3.14159265358979323846f;
 
+namespace sam {
+
+constexpr int image_size = 1024;
+constexpr int mask_size = image_size / 4;
+
+struct PixelAccessor {
+    int stride_row;
+    int stride_channel;
+    std::array<int, 3> channel_map;
+
+    PixelAccessor(ImageView image) {
+        stride_channel = count(image.channels);
+        stride_row = image.extent.width * stride_channel;
+        switch (image.channels) {
+        case Channels::bgra:
+            channel_map = {2, 1, 0};
+            break;
+        case Channels::argb:
+            channel_map = {1, 2, 3};
+            break;
+        case Channels::mask:
+            channel_map = {0, 0, 0};
+            break;
+        default:
+            channel_map = {0, 1, 2};
+            break;
+        }
+    }
+
+    uint8_t get(uint8_t const* pixels, int x, int y, int c) const {
+        return pixels[y * stride_row + x * stride_channel + channel_map[c]];
+    }
+
+    void set(uint8_t* pixels, int x, int y, int c, uint8_t value) {
+        pixels[y * stride_row + x * stride_channel + channel_map[c]] = value;
+    }
+};
+
+inline float resize_longest_side(Extent extent, int target_longest_side) {
+    int longest_side = std::max(extent.width, extent.height);
+    return float(target_longest_side) / float(longest_side);
+}
+
+inline int scale_coord(int coord, float scale) { return int(coord * scale + 0.5f); }
+
+inline Extent scale_extent(Extent extent, float scale) {
+    return Extent(scale_coord(extent.width, scale), scale_coord(extent.height, scale));
+}
+
+inline std::vector<float> preprocess_image(ImageView image) {
+    constexpr float mean[] = {123.675f, 116.28f, 103.53f};
+    constexpr float std[] = {58.395f, 57.12f, 57.375f};
+
+    std::optional<Image> resized;
+    float scale = resize_longest_side(image.extent, image_size);
+    if (scale != 1) {
+        resized = resize(image, scale_extent(image.extent, scale));
+        image = ImageView(*resized);
+    }
+
+    auto input_pixel = PixelAccessor(image);
+    std::vector<float> result(3 * image_size * image_size);
+    int result_stride = image_size * image_size;
+    for (int c = 0; c < 3; ++c) {
+        for (int y = 0; y < image_size; ++y) {
+            for (int x = 0; x < image_size; ++x) {
+                float value = float(input_pixel.get(image.pixels, x, y, c));
+                float normalized = (value - mean[c]) / std[c];
+                result[c * result_stride + y * image_size + x] = normalized;
+            }
+        }
+    }
+    return result;
+}
+
+inline float transform_coord(int p, float scale, int image_size = 1024) {
+    float center_normalized = (float(p) * scale + 0.5f) / float(image_size);
+    return 2.f * center_normalized - 1.f;
+}
+
+// Transforms a point from coordinates in the original input image (any resolution)
+// to input in [-1, 1] expected by the prompt encoder.
+inline std::array<float, 4> preprocess_prompt(Point point, Extent input_image_extent) {
+    float scale = resize_longest_side(input_image_extent, image_size);
+    float x = transform_coord(point.x, scale, image_size);
+    float y = transform_coord(point.y, scale, image_size);
+    return std::array{x, y, 0.f, 0.f};
+}
+
+inline Image postprocess_mask(std::span<float const> mask_data, Extent target_extent) {
+    float scale = resize_longest_side(target_extent, image_size);
+    auto scaled_extent = scale_extent(target_extent, scale);
+    auto mask = Image(scaled_extent, Channels::mask);
+    auto mask_pixel = PixelAccessor(mask);
+
+    for (int y = 0; y < scaled_extent.height; ++y) {
+        for (int x = 0; x < scaled_extent.width; ++x) {
+            float value = mask_data[y / 4 * mask_size + x / 4];
+            mask_pixel.set(mask.pixels(), x, y, 0, uint8_t(value > 0.0f ? 255 : 0));
+        }
+    }
+
+    if (scaled_extent == target_extent) {
+        return mask;
+    }
+    return resize(mask, target_extent);
+}
+
 inline Tensor conv_2d_batch_norm(Model m, Tensor x, int stride = 1, int pad = 0, int dilation = 1,
                                  int groups = 1) {
     if (groups == 1) {
@@ -229,37 +337,9 @@ inline Tensor tiny_vit(Model m, Tensor x, TinyViTParams const& p) {
     return x;
 }
 
-inline std::vector<float> preprocess_image(char const* filepath) {
-    constexpr float mean[] = {123.675f, 116.28f, 103.53f};
-    constexpr float std[] = {58.395f, 57.12f, 57.375f};
-
-    auto image = Image::load(filepath);
-    auto resized = resize(image, {1024, 1024});
-
-    std::vector<float> result(3 * 1024 * 1024);
-    int pixel_stride = count(resized.channels());
-    int row_stride = resized.extent().width * pixel_stride;
-    int result_stride = 1024 * 1024;
-    for (int c = 0; c < 3; ++c) {
-        for (int y = 0; y < 1024; ++y) {
-            for (int x = 0; x < 1024; ++x) {
-                float value = float(resized.pixels()[y * row_stride + x * pixel_stride + c]);
-                float normalized = (value - mean[c]) / std[c];
-                result[c * result_stride + y * 1024 + x] = normalized;
-            }
-        }
-    }
-    return result;
-}
-
 //
 // Prompt encoder
 //
-
-inline float transform_point_coord(int p, int image_size = 1024) {
-    float center_normalized = (float(p) + 0.5f) / float(image_size);
-    return 2.f * center_normalized - 1.f;
-}
 
 inline Tensor position_embedding_random(Model m, Tensor coords) {
     Tensor pe = m.weights("positional_encoding_gaussian_matrix");
@@ -368,21 +448,22 @@ inline auto two_way_attention_block(Model m, Tensor queries, Tensor keys, Tensor
     Tensor q = ggml_add(m, queries, query_pe);
     Tensor k = ggml_add(m, keys, key_pe);
     Tensor attn_out = attention(m["cross_attn_t2i"], q, k, keys, num_heads);
-    queries = ggml_add(m, queries, attn_out); // TODO: inplace
+    queries = ggml_add_inplace(m, queries, attn_out);
     queries = layer_norm(m["norm2"], queries);
 
     // MLP block
     Tensor mlp_out = mlp_block(m["mlp"], queries);
-    queries = ggml_add(m, queries, mlp_out); // TODO: inplace
+    queries = ggml_add_inplace(m, queries, mlp_out);
     queries = layer_norm(m["norm3"], queries);
 
-    queries = ggml_cont(m, queries); // ????????????
+    // ???: without this queries is overwritten by keys = keys + attn_out
+    queries = ggml_cont(m, queries);
 
     // Cross attention block, image embedding attending to tokens
     q = ggml_add(m, queries, query_pe);
-    // k = ggml_add(m, keys, key_pe); // TODO: redundant, same as above
+    // k = ggml_add(m, keys, key_pe); // redundant, same as above
     attn_out = attention(m["cross_attn_i2t"], k, q, queries, num_heads);
-    keys = ggml_add_inplace(m, keys, attn_out); // TODO: inplace
+    keys = ggml_add_inplace(m, keys, attn_out);
     keys = layer_norm(m["norm4"], keys);
 
     return std::tuple{queries, keys};
@@ -482,7 +563,7 @@ inline MaskPrediction predict_masks(Model m, Tensor image_embeddings, Tensor spa
                                     image_embeddings->ne[1], image_embeddings->ne[2],
                                     tokens->ne[2]);
     src = ggml_repeat(m, image_embeddings, src);
-    src = ggml_add(m, src, dense_prompt); // inplace?
+    src = ggml_add_inplace(m, src, dense_prompt);
 
     Tensor image_pe = m.weights("dense_positional_embedding");
     Tensor pos_src = ggml_new_tensor_4d(
@@ -531,4 +612,5 @@ inline MaskPrediction predict_masks(Model m, Tensor image_embeddings, Tensor spa
     return {masks, iou_pred};
 }
 
+} // namespace sam
 } // namespace dlimg

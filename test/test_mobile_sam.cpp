@@ -91,7 +91,8 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
     gguf_free(gguf_ctx);
 
     auto input_path_str = input_path.string();
-    auto image_data = preprocess_image(input_path_str.c_str());
+    auto input_image = Image::load(input_path_str.c_str());
+    auto image_data = sam::preprocess_image(input_image);
 
     ggml_init_params graph_ctx_params{};
     graph_ctx_params.mem_size = GGML_DEFAULT_GRAPH_SIZE * ggml_tensor_overhead() +
@@ -109,7 +110,8 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
         ggml_tensor* x = ggml_new_tensor_4d(graph_ctx, GGML_TYPE_F32, 1024, 1024, 3, 1);
         ggml_set_name(x, "input");
 
-        Tensor image_embeddings = ggml_cont(model, tiny_vit(model["enc"], x, TinyViTParams{}));
+        Tensor image_embeddings = ggml_cont(
+            model, sam::tiny_vit(model["enc"], x, sam::TinyViTParams{}));
         ggml_set_name(image_embeddings, "image_embeddings");
         ggml_build_forward_expand(graph, image_embeddings);
     }
@@ -159,15 +161,11 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
         ggml_set_name(point_coords, "point_coords");
         ggml_set_input(point_coords);
 
-        auto prompt_embeddings = encode_prompt(model["prompt_encoder"], point_coords);
+        auto prompt_embeddings = sam::encode_prompt(model["prompt_encoder"], point_coords);
         ggml_set_name(prompt_embeddings.sparse, "sparse_prompt");
         ggml_set_name(prompt_embeddings.dense, "dense_prompt");
-        ggml_set_output(prompt_embeddings.sparse);
-        ggml_set_output(prompt_embeddings.dense);
-        ggml_build_forward_expand(graph, prompt_embeddings.sparse);
-        ggml_build_forward_expand(graph, prompt_embeddings.dense);
 
-        auto [masks, iou] = predict_masks(
+        auto [masks, iou] = sam::predict_masks(
             model["dec"], image_embeddings, prompt_embeddings.sparse, prompt_embeddings.dense);
         ggml_set_name(masks, "masks");
         ggml_set_name(iou, "iou");
@@ -175,8 +173,6 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
         ggml_set_output(iou);
         ggml_build_forward_expand(graph, masks);
         ggml_build_forward_expand(graph, iou);
-
-        ggml_graph_print(graph);
     }
     {
         ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
@@ -188,47 +184,26 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
         ggml_backend_tensor_set(
             image_embeddings, image_embeddings_data.data(), 0, ggml_nbytes(image_embeddings));
 
-        auto points = std::array{
-            transform_point_coord(float(point.x)), transform_point_coord(float(point.y)), 0.f, 0.f};
+        auto points = sam::preprocess_prompt(point, input_image.extent());
         ggml_tensor* point_coords = ggml_graph_get_tensor(graph, "point_coords");
         ggml_backend_tensor_set(point_coords, points.data(), 0, ggml_nbytes(point_coords));
 
         ggml_backend_graph_compute(backend, graph);
     }
 
-    auto prompt_embeddings_sparse = ggml_graph_get_tensor(graph, "sparse_prompt");
-    print_tensor(prompt_embeddings_sparse);
-
-    auto prompt_embeddings_dense = ggml_graph_get_tensor(graph, "dense_prompt");
-    print_tensor(prompt_embeddings_dense);
-
     auto output_iou = ggml_graph_get_tensor(graph, "iou");
     print_tensor(output_iou);
 
-    auto output_mask = ggml_graph_get_tensor(graph, "masks");
-    print_tensor(output_mask);
-
-    if (auto inter = ggml_graph_get_tensor(graph, "INTER")) {
-        print_tensor(inter);
-    }
-
     int n = 256;
+    auto output_mask = ggml_graph_get_tensor(graph, "masks");
     std::vector<float> mask_data(4 * n * n);
     ggml_backend_tensor_get(output_mask, mask_data.data(), 0, ggml_nbytes(output_mask));
-    auto output_masks = std::array{dlimg::Image(dlimg::Extent(n, n), dlimg::Channels::mask),
-                                   dlimg::Image(dlimg::Extent(n, n), dlimg::Channels::mask),
-                                   dlimg::Image(dlimg::Extent(n, n), dlimg::Channels::mask),
-                                   dlimg::Image(dlimg::Extent(n, n), dlimg::Channels::mask)};
 
     for (int i = 0; i < 4; ++i) {
-        for (int y = 0; y < n; ++y) {
-            for (int x = 0; x < n; ++x) {
-                output_masks[i].pixels()[y * n + x] =
-                    uint8_t(mask_data[i * n * n + y * n + x] > 0.0f ? 255.0f : 0.0f);
-            }
-        }
         auto filepath = std::format("{}_{}.png", output_path.string(), i);
-        dlimg::Image::save(output_masks[i], filepath.c_str());
+        auto data = std::span(mask_data).subspan(i * n * n, n * n);
+        auto output_mask = sam::postprocess_mask(data, input_image.extent());
+        Image::save(output_mask, filepath.c_str());
     }
 }
 
@@ -243,7 +218,7 @@ TEST_CASE("GGML_MOBILE", "[ggml]") {
         Path input_path = dlimg::test_dir() / "input" / "cat_and_hat.png";
         {
             Path output_path = dlimg::test_dir() / "result" / "sam_ggml_cat";
-            run_sam_ggml2(model_path, input_path, dlimg::Point{136 * 2, 211 * 2}, output_path);
+            run_sam_ggml2(model_path, input_path, dlimg::Point{136, 211}, output_path);
         }
         // {
         //     Path output_path = dlimg::test_dir() / "result" / "sam_ggml_wardrobe_2.png";
