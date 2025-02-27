@@ -1,8 +1,0 @@
-include(FetchContent)
-
-FetchContent_Declare(
-  ggml
-  GIT_REPOSITORY https://github.com/ggml-org/ggml.git
-  GIT_TAG        98a61a0d0b43cba06c3ac1c603813639552a0701
-)
-FetchContent_MakeAvailable(ggml)
