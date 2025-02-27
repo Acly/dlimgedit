@@ -1,0 +1,3 @@
+[submodule "depend/ggml"]
+	path = depend/ggml
+	url = https://github.com/ggml-org/ggml.git
