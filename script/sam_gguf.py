@@ -79,7 +79,7 @@ for name, tensor in model.items():
         tensor = tensor[:, attention_bias_idxs]
 
     if name.endswith("running_var"):
-        tensor = tensor + batch_norm_eps
+        tensor = torch.sqrt(tensor + batch_norm_eps)
 
     # Precompute dense positional embeddings from random matrix stored in the model
     if name == "prompt_encoder.pe_layer.positional_encoding_gaussian_matrix":
