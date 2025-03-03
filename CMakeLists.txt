@@ -22,7 +22,20 @@ add_subdirectory(depend/eigen)
 add_subdirectory(depend/onnx)
 add_subdirectory(depend/stb)
 add_subdirectory(depend/dylib)
+
+set(GGML_CCACHE OFF)
+set(GGML_BLAS_VENDOR OpenBLAS)
+set(GGML_VULKAN ON)
+set(GGML_BLAS ON)
+
 add_subdirectory(depend/ggml)
+
+if(MSVC)
+  foreach(tgt ggml ggml-base ggml-cpu ggml-blas)
+    target_compile_options(${tgt} PRIVATE /Zi)
+    target_link_options(${tgt} PRIVATE /DEBUG)
+  endforeach(tgt ggml ggml-base ggml-cpu)
+endif()
 
 add_subdirectory(src)
 

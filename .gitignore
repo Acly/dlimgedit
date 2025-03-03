@@ -1,6 +1,7 @@
 build
 install
 .vscode
+.vtune
 .debug
 test/result
 *.onnx
