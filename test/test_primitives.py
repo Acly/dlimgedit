@@ -32,6 +32,28 @@ def test_conv_2d(kernel_size: int, bias_mode: str):
     workbench.invoke_test("conv_2d", x, result, args)
 
     assert torch.allclose(result, expected)
+
+
+@pytest.mark.parametrize("kernel_size", [1, 3])
+@pytest.mark.parametrize("bias_mode", ["with_bias", "without_bias"])
+def test_conv_2d_channels(kernel_size: int, bias_mode: str):
+    x = torch.rand(1, 3, 4, 5)
+    kernel = torch.rand(2, 3, kernel_size, kernel_size)
+    bias = None
+    args = dict(weight=kernel)
+    if bias_mode == "with_bias":
+        bias = torch.tensor([7, 21]).float()
+        args["bias"] = bias
+    expected = torch.nn.functional.conv2d(x, kernel, bias=bias)
+
+    x = x.permute(0, 2, 3, 1).contiguous()
+    args["weight"] = kernel.permute(2, 3, 1, 0).contiguous()
+
+    result = torch.zeros_like(expected).permute(0, 2, 3, 1).contiguous()
+    workbench.invoke_test("conv_2d_channels", x, result, args)
+    result = result.permute(0, 3, 1, 2).contiguous()
+
+    workbench.print_results(result, expected)
     assert torch.allclose(result, expected)
 
 

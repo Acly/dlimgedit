@@ -54,6 +54,33 @@ inline Tensor conv_2d_depth_wise(Model m, Tensor x, int stride = 1, int pad = 0)
     return result;
 }
 
+inline Tensor conv_2d_channels(Model m, Tensor x, int stride = 1, int pad = 0) {
+    Tensor kernel = m.weights("weight");
+    int64_t c = x->ne[0];
+    int64_t w = x->ne[1];
+    int64_t h = x->ne[2];
+    int64_t batch = x->ne[3];
+    int64_t kernel_w = kernel->ne[2];
+    int64_t kernel_h = kernel->ne[3];
+    int64_t kernel_c = kernel->ne[1];
+    int64_t kernel_count = kernel->ne[0];
+
+    if (kernel_w == 1 && kernel_h == 1 && stride == 1) {
+        kernel = ggml_reshape_3d(m, kernel, kernel_count, kernel_c * kernel_w * kernel_h, 1);
+        x = ggml_reshape_3d(m, x, c, w * h, batch);
+        x = ggml_transpose(m, x);
+        x = ggml_out_prod(m, kernel, x);
+        x = ggml_reshape_4d(m, x, kernel_count, w, h, batch);
+    } else {
+        x = ggml_conv_2d_cont_channels(m, kernel, x, stride, stride, pad);
+    }
+    if (Tensor bias = m.find("bias")) {
+        bias = ggml_reshape_4d(m, bias, bias->ne[0], 1, 1, 1);
+        x = ggml_add_inplace(m, x, bias);
+    }
+    return x;
+}
+
 inline Tensor layer_norm(Model m, Tensor x, float eps = 1e-5f) {
     x = ggml_norm(m, x, eps);
     x = ggml_mul_inplace(m, x, m.weights("weight"));
