@@ -2,6 +2,7 @@
 #include "primitives.hpp"
 
 #include <fmt/format.h>
+#include <ggml-blas.h>
 #include <ggml-cpu.h>
 #include <ggml.h>
 
@@ -39,14 +40,21 @@ struct Workbench {
                                   ggml_graph_overhead() + 2048 * ggml_tensor_overhead();
         context_params.no_alloc = true;
         model.model_context = model.graph_context = ggml_init(context_params);
+        model.graph = ggml_new_graph(model);
+        backends[0] = ggml_backend_blas_init();
+        backends[1] = ggml_backend_cpu_init();
+
 
         for (int i = 0; i < input_count; ++i) {
             auto& raw = inputs_raw[i];
-            model.create_tensor(
-                raw.name, {raw.n, raw.c, raw.h, raw.w}, std::span(raw.data, raw.size()));
+            auto tensor = ggml_new_tensor_4d(model,GGML_TYPE_F32 ,raw.w,raw.h,raw.c,raw.n);
+            ggml_set_name(tensor, raw.name);
         }
-        ggml_set_no_alloc(model, false);
-        model.graph = ggml_new_graph(model);
+        ggml_backend_alloc_ctx_tensors(model, backends[0]);
+        for (auto&& raw : std::span(inputs_raw, input_count)) {
+            auto tensor = ggml_get_tensor(model, raw.name);
+            ggml_backend_tensor_set(tensor, raw.data, 0, raw.size_bytes());
+        }
     }
 
     void output(Tensor tensor, RawTensor dest) {
@@ -58,7 +66,16 @@ struct Workbench {
     }
 
     void run() {
-        ggml_graph_compute_with_ctx(model, model.graph, 1);
+        ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backends[0]));
+        ggml_backend_buffer_type_t buffer_types[] = {
+            ggml_backend_get_default_buffer_type(backends[0]),
+            ggml_backend_get_default_buffer_type(backends[1]),
+        };
+        auto sched = ggml_backend_sched_new(
+            backends.data(), buffer_types, 2, ggml_graph_size(model.graph), false);
+
+        ggml_backend_sched_graph_compute(sched, model.graph);
+
         for (auto& [output, output_raw] : outputs) {
             memcpy(output_raw.data, ggml_get_data_f32(output), ggml_nbytes(output));
         }
@@ -66,6 +83,7 @@ struct Workbench {
 
     Model model;
     std::vector<std::tuple<Tensor, RawTensor>> outputs;
+    std::array<ggml_backend_t, 2> backends;
 };
 
 } // namespace dlimg
@@ -88,6 +106,8 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             w.output(conv_2d_depth_wise(w.model, input), output);
         } else if (name == "conv_2d") {
             w.output(conv_2d(w.model, input), output);
+        } else if (name == "conv_2d_channels") {            
+            w.output(conv_2d_channels(w.model, input), output);
         } else if (name == "batch_norm_2d") {
             w.output(batch_norm_2d(w.model, input), output);
         } else if (name == "layer_norm") {
