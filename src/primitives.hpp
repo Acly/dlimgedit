@@ -16,8 +16,8 @@ inline Tensor linear(Model m, Tensor x) {
     return x;
 }
 
-inline Tensor conv_2d(Model m, Tensor x, int stride = 1, int pad = 0, int dilation = 1) {
-    x = ggml_conv_2d(m, m.weights("weight"), x, stride, stride, pad, pad, dilation, dilation);
+inline Tensor conv_2d(Model m, Tensor x, int stride = 1, int pad = 0) {
+    x = ggml_conv_2d(m, m.weights("weight"), x, stride, stride, pad, pad, 1, 1);
     if (Tensor bias = m.find("bias")) {
         bias = ggml_reshape_4d(m, bias, 1, 1, bias->ne[0], 1);
         x = ggml_add_inplace(m, x, bias);
@@ -25,7 +25,7 @@ inline Tensor conv_2d(Model m, Tensor x, int stride = 1, int pad = 0, int dilati
     return x;
 }
 
-inline Tensor conv_2d_depth_wise(Model m, Tensor x, int stride = 1, int pad = 0, int dilation = 1) {
+inline Tensor conv_2d_depth_wise(Model m, Tensor x, int stride = 1, int pad = 0) {
     auto ctx = m.graph_context;
     auto a = m.weights("weight");
     auto b = x;
@@ -33,17 +33,17 @@ inline Tensor conv_2d_depth_wise(Model m, Tensor x, int stride = 1, int pad = 0,
     int s1 = stride;
     int p0 = pad;
     int p1 = pad;
-    int d0 = dilation;
-    int d1 = dilation;
+    int d0 = 1;
+    int d1 = 1;
 
     // Copied from ggml.c, fixed hardcoded GGML_TYPE_F16
     Tensor new_a = ggml_reshape_4d(ctx, a, a->ne[0], a->ne[1], 1, a->ne[2] * a->ne[3]);
-    Tensor im2col =
-        ggml_im2col(ctx, new_a, ggml_reshape_4d(ctx, b, b->ne[0], b->ne[1], 1, b->ne[2] * b->ne[3]),
-                    s0, s1, p0, p1, d0, d1, true, b->type); // [N * IC, OH, OW, KH * KW]
-    Tensor new_b =
-        ggml_reshape_4d(ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1], b->ne[2],
-                        b->ne[3]); // [N * IC, OH, OW, KH * KW] => [N, IC, OH * OW, KH * KW]
+    Tensor im2col = ggml_im2col(ctx, new_a,
+                                ggml_reshape_4d(ctx, b, b->ne[0], b->ne[1], 1, b->ne[2] * b->ne[3]),
+                                s0, s1, p0, p1, d0, d1, true, b->type); // [N * IC, OH, OW, KH * KW]
+    Tensor new_b = ggml_reshape_4d(
+        ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1], b->ne[2],
+        b->ne[3]); // [N * IC, OH, OW, KH * KW] => [N, IC, OH * OW, KH * KW]
 
     new_a = ggml_reshape_4d(ctx, new_a, (new_a->ne[0] * new_a->ne[1]), new_a->ne[2], new_a->ne[3],
                             1); // [OC，1, KH, KW] => [1, OC, 1, KH * KW]

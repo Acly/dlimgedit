@@ -113,12 +113,11 @@ inline Image postprocess_mask(std::span<float const> mask_data, Extent target_ex
     return mask;
 }
 
-inline Tensor conv_2d_batch_norm(Model m, Tensor x, int stride = 1, int pad = 0, int dilation = 1,
-                                 int groups = 1) {
+inline Tensor conv_2d_batch_norm(Model m, Tensor x, int stride = 1, int pad = 0, int groups = 1) {
     if (groups == 1) {
-        x = conv_2d(m["c"], x, stride, pad, dilation);
+        x = conv_2d(m["c"], x, stride, pad);
     } else {
-        x = conv_2d_depth_wise(m["c"], x, stride, pad, dilation);
+        x = conv_2d_depth_wise(m["c"], x, stride, pad);
     }
     x = batch_norm_2d(m["bn"], x);
     return x;
@@ -151,7 +150,7 @@ inline Tensor mb_conv(Model m, Tensor x) {
     x = conv_2d_batch_norm(m["conv1"], x);
     x = ggml_gelu_inplace(m, x);
 
-    x = conv_2d_batch_norm(m["conv2"], x, 1, 1, 1, /* groups */ x->ne[2]);
+    x = conv_2d_batch_norm(m["conv2"], x, 1, 1, /* groups */ x->ne[2]);
     x = ggml_gelu_inplace(m, x);
 
     x = conv_2d_batch_norm(m["conv3"], x);
@@ -171,7 +170,7 @@ inline Tensor patch_merging(Model m, Tensor x, int input_resolution) {
 
     int out_c = m.weights("conv2.c.weight")->ne[3];
     int stride = (out_c == 320 || out_c == 448 || out_c == 576) ? 1 : 2;
-    x = conv_2d_batch_norm(m["conv2"], x, stride, 1, 1, out_c);
+    x = conv_2d_batch_norm(m["conv2"], x, stride, 1, out_c);
     x = ggml_gelu_inplace(m, x);
 
     x = conv_2d_batch_norm(m["conv3"], x);
@@ -259,7 +258,7 @@ inline Tensor tiny_vit_block(Model m, Tensor x, int input_resolution, int dim, i
     x = ggml_cont(m, ggml_transpose(m, x));
     x = ggml_reshape_4d(m, x, W, H, C, B);
 
-    x = conv_2d_batch_norm(m["local_conv"], x, 1, 1, 1, /* groups */ dim);
+    x = conv_2d_batch_norm(m["local_conv"], x, 1, 1, /* groups */ dim);
     x = ggml_reshape_3d(m, x, L, C, B);
     x = ggml_cont(m, ggml_transpose(m, x));
 

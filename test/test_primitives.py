@@ -16,20 +16,22 @@ def test_linear():
     assert torch.allclose(result, expected)
 
 
+@pytest.mark.parametrize("kernel_size", [1, 3])
 @pytest.mark.parametrize("bias_mode", ["with_bias", "without_bias"])
-def test_conv_2d(bias_mode: str):
+def test_conv_2d(kernel_size: int, bias_mode: str):
     x = torch.rand(1, 3, 4, 5)
-    weight = torch.rand(2, 3, 3, 3)
+    weight = torch.rand(2, 3, kernel_size, kernel_size)
     bias = None
     args = dict(weight=weight)
     if bias_mode == "with_bias":
         bias = torch.tensor([7, 21]).float()
         args["bias"] = bias
-    result = torch.zeros(1, 2, 2, 3)
+    expected = torch.nn.functional.conv2d(x, weight, bias=bias)
 
+    result = torch.zeros_like(expected)
     workbench.invoke_test("conv_2d", x, result, args)
 
-    expected = torch.nn.functional.conv2d(x, weight, bias=bias)
+    assert torch.allclose(result, expected)
     assert torch.allclose(result, expected)
 
 
@@ -53,12 +55,13 @@ def test_batch_norm_2d():
     bias = torch.rand(3)
     mean = torch.rand(3)
     var = torch.rand(3)
-    result = torch.zeros(1, 3, 4, 5)
+    expected = torch.nn.functional.batch_norm(x, mean, var, weight, bias, eps=1e-5)
+    result = torch.zeros_like(expected)
 
+    var = (var + 1e-5).sqrt()
     state = dict(weight=weight, bias=bias, running_mean=mean, running_var=var)
     workbench.invoke_test("batch_norm_2d", x, result, state)
 
-    expected = torch.nn.functional.batch_norm(x, mean, var, weight, bias, eps=0)
     assert torch.allclose(result, expected)
 
 
