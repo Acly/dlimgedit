@@ -18,19 +18,19 @@ class RawTensor(ctypes.Structure):
 
 
 def to_raw_tensor(name: str, tensor: torch.Tensor):
-    assert tensor.is_contiguous()
     assert tensor.dtype == torch.float32
     while tensor.dim() < 4:
         tensor = tensor.unsqueeze(0)
     assert tensor.dim() == 4
+    torch_tensor = tensor.contiguous().float()
     raw_tensor = RawTensor()
     raw_tensor.name = name.encode()
-    raw_tensor.data = ctypes.cast(tensor.float().data_ptr(), float_ptr)
+    raw_tensor.data = ctypes.cast(torch_tensor.data_ptr(), float_ptr)
     raw_tensor.w = tensor.size(3)
     raw_tensor.h = tensor.size(2)
     raw_tensor.c = tensor.size(1)
     raw_tensor.n = tensor.size(0)
-    return raw_tensor
+    return (raw_tensor, torch_tensor)
 
 
 root_dir = Path(__file__).parent.parent
@@ -54,7 +54,10 @@ def invoke_test(
     state.update(kwargs)
     raw_inputs = [to_raw_tensor("input", input)]
     raw_inputs += [to_raw_tensor(name, tensor) for name, tensor in state.items()]
-    raw_output = to_raw_tensor("output", output)
+    input_tensors = [t for _, t in raw_inputs]
+    input_tensors  # keep the tensors alive
+    raw_inputs = [t for t, _ in raw_inputs]
+    raw_output, output_tensor = to_raw_tensor("output", output)
     result = lib.dlimg_workbench(
         test_case.encode(),
         len(raw_inputs),
@@ -70,6 +73,14 @@ def randomize(state_dict: dict[str, torch.Tensor]):
         for k, v in state_dict.items()
         if v.dtype.is_floating_point
     }
+
+
+def to_channel_last(tensor: torch.Tensor):
+    return tensor.permute(0, 2, 3, 1).contiguous()
+
+
+def revert_channel_last(tensor: torch.Tensor):
+    return tensor.permute(0, 3, 1, 2).contiguous()
 
 
 def print_results(result: torch.Tensor, expected: torch.Tensor):

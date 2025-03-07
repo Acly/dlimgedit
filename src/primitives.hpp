@@ -26,32 +26,17 @@ inline Tensor conv_2d(Model m, Tensor x, int stride = 1, int pad = 0) {
 }
 
 inline Tensor conv_2d_depth_wise(Model m, Tensor x, int stride = 1, int pad = 0) {
-    auto ctx = m.graph_context;
-    auto a = m.weights("weight");
-    auto b = x;
-    int s0 = stride;
-    int s1 = stride;
-    int p0 = pad;
-    int p1 = pad;
-    int d0 = 1;
-    int d1 = 1;
+    return ggml_conv_2d_depthwise_cont_channels(m, m.weights("weight"), x, stride, stride, pad, GGML_NCHW);
+}
 
-    // Copied from ggml.c, fixed hardcoded GGML_TYPE_F16
-    Tensor new_a = ggml_reshape_4d(ctx, a, a->ne[0], a->ne[1], 1, a->ne[2] * a->ne[3]);
-    Tensor im2col = ggml_im2col(ctx, new_a,
-                                ggml_reshape_4d(ctx, b, b->ne[0], b->ne[1], 1, b->ne[2] * b->ne[3]),
-                                s0, s1, p0, p1, d0, d1, true, b->type); // [N * IC, OH, OW, KH * KW]
-    Tensor new_b = ggml_reshape_4d(
-        ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1], b->ne[2],
-        b->ne[3]); // [N * IC, OH, OW, KH * KW] => [N, IC, OH * OW, KH * KW]
-
-    new_a = ggml_reshape_4d(ctx, new_a, (new_a->ne[0] * new_a->ne[1]), new_a->ne[2], new_a->ne[3],
-                            1); // [OC，1, KH, KW] => [1, OC, 1, KH * KW]
-    Tensor result = ggml_mul_mat(ctx, new_a, new_b);
-    result = ggml_reshape_4d(ctx, result, im2col->ne[1], im2col->ne[2], b->ne[2],
-                             b->ne[3]); // [N, OC, OH, OW]
-
-    return result;
+inline Tensor conv_2d_depth_wise_channels(Model m, Tensor x, int stride = 1, int pad = 0) {
+    Tensor kernel = m.weights("weight");
+    // TODO: reshape flips input-depth and depth-multiplier
+    // weights are arranged wrong to make regular 1x1 conv2d work as ggml_out_prod
+    int64_t c = kernel->ne[0];
+    GGML_ASSERT(kernel->ne[1] == 1);
+    kernel = ggml_reshape_4d(m, kernel, 1, c, kernel->ne[2], kernel->ne[3]);
+    return ggml_conv_2d_depthwise_cont_channels(m, kernel, x, stride, stride, pad, GGML_NHWC);
 }
 
 inline Tensor conv_2d_channels(Model m, Tensor x, int stride = 1, int pad = 0) {
@@ -94,15 +79,16 @@ inline Tensor batch_norm_2d(Model m, Tensor x, float eps = 1e-5f) {
     Tensor weight = m.weights("weight");
     Tensor bias = m.weights("bias");
 
-    var = ggml_reshape_4d(m, var, 1, 1, var->ne[0], 1);
-    mean = ggml_reshape_4d(m, mean, 1, 1, mean->ne[0], 1);
-    weight = ggml_reshape_4d(m, weight, 1, 1, weight->ne[0], 1);
-    bias = ggml_reshape_4d(m, bias, 1, 1, bias->ne[0], 1);
-    x = ggml_sub(m, x, mean);
-    x = ggml_div(m, x, var);
-    x = ggml_mul(m, x, weight);
-    x = ggml_add(m, x, bias);
-    return x;
+    var = ggml_reshape_4d(m, var, var->ne[0], 1, 1, 1);
+    mean = ggml_reshape_4d(m, mean, mean->ne[0], 1, 1, 1);
+    weight = ggml_reshape_4d(m, weight, weight->ne[0], 1, 1, 1);
+    bias = ggml_reshape_4d(m, bias, bias->ne[0], 1, 1, 1);
+
+    x = ggml_sub_inplace(m, x, mean);
+    x = ggml_div_inplace(m, x, var);
+    x = ggml_mul_inplace(m, x, weight);
+    x = ggml_add_inplace(m, x, bias);
+    return m.named(x);
 }
 
 } // namespace dlimg

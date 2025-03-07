@@ -36,6 +36,52 @@ void print_tensor(Tensor t) {
     }
 }
 
+struct Timer {
+
+    struct Event {
+        Tensor node;
+        int64_t elapsed;
+    };
+
+    std::vector<Event> events;
+
+    explicit Timer(ggml_cgraph* graph, ggml_backend_sched_t sched) {
+        events.reserve(ggml_graph_n_nodes(graph));
+        ggml_backend_sched_set_eval_callback(sched, &Timer::callback, this);
+    }
+
+    static bool callback(Tensor t, bool ask, void* user_data) {
+        if (ask) {
+            Timer& timer = *reinterpret_cast<Timer*>(user_data);
+            timer.events.push_back({t, ggml_time_us()});
+            return true;
+        }
+        return true;
+    }
+
+    void print() {
+        for (int i = 0; i < events.size(); ++i) {
+            if (i < events.size() - 1) {
+                int64_t elapsed = events[i + 1].elapsed - events[i].elapsed;
+                fmt::print("{:<16} {:8d} us | {}\n", ggml_op_name(events[i].node->op), elapsed,
+                           ggml_get_name(events[i].node));
+            }
+        }
+    }
+};
+
+bool debug_printer(Tensor t, bool ask, void* user_data) {
+    auto name = std::string_view(ggml_get_name(t));
+    if (name.starts_with("PRINT!")) {
+        if (ask) {
+            return true;
+        }
+        print_tensor(t);
+        return true;
+    }
+    return !ask;
+}
+
 void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point const& point,
                    Path const& output_path) {
 
@@ -68,6 +114,14 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
     ggml_backend_t backend_blas = ggml_backend_blas_init();
     // ggml_backend_t backend = ggml_backend_vk_init(0);
 
+    // 
+    //
+    // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    // TODO: fix race in depthwise conv
+    // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    //
+    ggml_backend_cpu_set_n_threads(backend_cpu, 1);
+
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(model_ctx, backend_cpu);
     ggml_backend_buffer_t buffer_blas = ggml_backend_alloc_ctx_tensors(model_ctx, backend_blas);
     for (ggml_tensor* t = ggml_get_first_tensor(model_ctx); t != nullptr;
@@ -98,7 +152,7 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
     std::vector<float> image_embeddings_data;
 
     {
-        ggml_tensor* x = ggml_new_tensor_4d(graph_ctx, GGML_TYPE_F32, 1024, 1024, 3, 1);
+        ggml_tensor* x = ggml_new_tensor_4d(graph_ctx, GGML_TYPE_F32, 3, 1024, 1024, 1);
         ggml_set_name(x, "input");
 
         Tensor image_embeddings = ggml_cont(
@@ -125,7 +179,10 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
         auto sched = ggml_backend_sched_new(
             backends, buffer_types, 2, ggml_graph_size(graph), false);
 
+        // Timer timer(graph, sched);
+        ggml_backend_sched_set_eval_callback(sched, debug_printer, nullptr);
         ggml_backend_sched_graph_compute(sched, graph);
+        // timer.print();
 
         auto image_embeddings_out = ggml_graph_get_tensor(graph, "image_embeddings");
         image_embeddings_data.resize(ggml_nelements(image_embeddings_out));

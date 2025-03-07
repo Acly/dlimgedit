@@ -78,6 +78,11 @@ struct Model {
         add_tensor(name, tensor);
     }
 
+    Tensor named(Tensor tensor) {
+        ggml_set_name(tensor, prefix.c_str());
+        return tensor;
+    }
+
     operator ggml_context*() { return graph_context; }
 };
 

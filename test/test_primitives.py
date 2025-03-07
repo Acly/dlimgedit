@@ -2,6 +2,7 @@ import pytest
 import torch
 
 from . import workbench
+from .workbench import revert_channel_last, to_channel_last
 
 
 def test_linear():
@@ -46,28 +47,39 @@ def test_conv_2d_channels(kernel_size: int, bias_mode: str):
         args["bias"] = bias
     expected = torch.nn.functional.conv2d(x, kernel, bias=bias)
 
-    x = x.permute(0, 2, 3, 1).contiguous()
-    args["weight"] = kernel.permute(2, 3, 1, 0).contiguous()
+    x = to_channel_last(x)
+    args["weight"] = kernel.permute(2, 3, 1, 0)
 
-    result = torch.zeros_like(expected).permute(0, 2, 3, 1).contiguous()
+    result = to_channel_last(torch.zeros_like(expected))
     workbench.invoke_test("conv_2d_channels", x, result, args)
-    result = result.permute(0, 3, 1, 2).contiguous()
+    result = revert_channel_last(result)
 
-    workbench.print_results(result, expected)
     assert torch.allclose(result, expected)
 
 
-def test_conv_2d_depth_wise():
+@pytest.mark.parametrize("scenario", ["stride_1_pad_0", "stride_2_pad_1"])
+@pytest.mark.parametrize("memory_layout", ["nchw", "nhwc"])
+def test_conv_2d_depth_wise(scenario: str, memory_layout: str):
+    stride, pad = {
+        "stride_1_pad_0": (1, 0),
+        "stride_2_pad_1": (2, 1),
+    }[scenario]
     x1 = torch.tensor([[1, 2, 2, 1], [4, 4, 4, 4], [0, 2, 2, 4], [1, 1, 1, 1]]).float()
     k = torch.tensor([[1, 0, 1], [0, 1, 0], [1, 0, 1]]).float()
 
-    x = torch.cat((x1, x1 * 2.0, x1 * 0.5), dim=1).reshape(1, 3, 4, 4)
+    x = torch.stack((x1, x1 * 2.0, x1 * 0.5)).reshape(1, 3, 4, 4)
     k = k.repeat(3, 1, 1, 1)
-    result = torch.zeros(1, 3, 2, 2)
+    expected = torch.nn.functional.conv2d(x, k, stride=stride, padding=pad, groups=3)
 
-    workbench.invoke_test("conv_2d_depth_wise", x, result, dict(weight=k))
+    result = torch.zeros_like(expected)
+    if memory_layout == "nhwc":
+        x = to_channel_last(x)
+        k = k.permute(2, 3, 0, 1)
+        result = to_channel_last(result)
+    workbench.invoke_test(f"conv_2d_depthwise_{memory_layout}_{scenario}", x, result, dict(weight=k))
+    if memory_layout == "nhwc":
+        result = revert_channel_last(result)
 
-    expected = torch.nn.functional.conv2d(x, k, groups=3)
     assert torch.allclose(result, expected)
 
 
@@ -78,11 +90,14 @@ def test_batch_norm_2d():
     mean = torch.rand(3)
     var = torch.rand(3)
     expected = torch.nn.functional.batch_norm(x, mean, var, weight, bias, eps=1e-5)
-    result = torch.zeros_like(expected)
+
+    x = to_channel_last(x)
+    result = to_channel_last(torch.zeros_like(expected))
 
     var = (var + 1e-5).sqrt()
     state = dict(weight=weight, bias=bias, running_mean=mean, running_var=var)
     workbench.invoke_test("batch_norm_2d", x, result, state)
+    result = revert_channel_last(result)
 
     assert torch.allclose(result, expected)
 

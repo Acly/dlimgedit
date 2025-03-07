@@ -45,6 +45,10 @@ def build_dense_positional_embeddings(
     pe = pe.permute(2, 0, 1)
     return pe
 
+def conv_2d_kernel_to_nhwc(kernel: torch.Tensor):
+    # TODO: should be permute(2, 3, 0, 1) ?
+    return kernel.permute(2, 3, 1, 0) # H W C_in C_out
+
 
 if len(sys.argv) < 3:
     print("Usage: sam_gguf.py file-model dir-output\n")
@@ -81,10 +85,13 @@ for name, tensor in model.items():
     if name.endswith("running_var"):
         tensor = torch.sqrt(tensor + batch_norm_eps)
 
+    if name.endswith("c.weight") or name.endswith("neck.0.weight") or name.endswith("neck.2.weight"):
+        assert tensor.shape[2] == tensor.shape[3] and tensor.shape[2] <= 3
+        tensor = conv_2d_kernel_to_nhwc(tensor)
+
     # Precompute dense positional embeddings from random matrix stored in the model
     if name == "prompt_encoder.pe_layer.positional_encoding_gaussian_matrix":
         pe = build_dense_positional_embeddings(tensor)
-        print(pe.unsqueeze(0))
         writer.add_tensor("dec.dense_positional_embedding", pe.numpy())
 
     tensor_data = tensor.numpy()

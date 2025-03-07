@@ -38,12 +38,12 @@ inline std::vector<float> preprocess_image(ImageView image) {
     auto input_pixel = PixelAccessor(image);
     std::vector<float> result(3 * image_size * image_size);
     int result_stride = image_size * image_size;
-    for (int c = 0; c < 3; ++c) {
-        for (int y = 0; y < image_size; ++y) {
-            for (int x = 0; x < image_size; ++x) {
+    for (int y = 0; y < image_size; ++y) {
+        for (int x = 0; x < image_size; ++x) {
+            for (int c = 0; c < 3; ++c) {
                 float value = float(input_pixel.get(image.pixels, x, y, c));
                 float normalized = (value - mean[c]) / std[c];
-                result[c * result_stride + y * image_size + x] = normalized;
+                result[y * image_size * 3 + x * 3 + c] = normalized;
             }
         }
     }
@@ -115,19 +115,19 @@ inline Image postprocess_mask(std::span<float const> mask_data, Extent target_ex
 
 inline Tensor conv_2d_batch_norm(Model m, Tensor x, int stride = 1, int pad = 0, int groups = 1) {
     if (groups == 1) {
-        x = conv_2d(m["c"], x, stride, pad);
+        x = conv_2d_channels(m["c"], x, stride, pad);
     } else {
-        x = conv_2d_depth_wise(m["c"], x, stride, pad);
+        x = conv_2d_depth_wise_channels(m["c"], x, stride, pad);
     }
     x = batch_norm_2d(m["bn"], x);
-    return x;
+    return m.named(x);
 }
 
 inline Tensor patch_embed(Model m, Tensor x) {
     x = conv_2d_batch_norm(m["seq.0"], x, 2, 1);
     x = ggml_gelu_inplace(m, x);
     x = conv_2d_batch_norm(m["seq.2"], x, 2, 1);
-    return x;
+    return m.named(x);
 }
 
 inline Tensor layer_norm_2d(Model m, Tensor x, float eps = 1e-6f) {
@@ -141,7 +141,15 @@ inline Tensor layer_norm_2d(Model m, Tensor x, float eps = 1e-6f) {
     x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3));
     x = ggml_mul_inplace(m, x, weight);
     x = ggml_add_inplace(m, x, bias);
+    ggml_set_name(x, "layer_norm_2d");
     return x;
+}
+
+inline Tensor layer_norm_2d_channels(Model m, Tensor x, float eps = 1e-6f) {
+    x = ggml_norm(m, x, eps);
+    x = ggml_mul_inplace(m, x, m.weights("weight"));
+    x = ggml_add_inplace(m, x, m.weights("bias"));
+    return m.named(x);
 }
 
 inline Tensor mb_conv(Model m, Tensor x) {
@@ -157,26 +165,24 @@ inline Tensor mb_conv(Model m, Tensor x) {
     x = ggml_add_inplace(m, x, shortcut);
     x = ggml_gelu_inplace(m, x);
 
-    return x;
+    return m.named(x);
 }
 
 inline Tensor patch_merging(Model m, Tensor x, int input_resolution) {
     if (x->ne[2] == 1) {
         x = ggml_reshape_4d(m, x, x->ne[0], input_resolution, input_resolution, x->ne[3]);
-        x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3)); // -> B C H W
     }
     x = conv_2d_batch_norm(m["conv1"], x);
     x = ggml_gelu_inplace(m, x);
 
-    int out_c = m.weights("conv2.c.weight")->ne[3];
-    int stride = (out_c == 320 || out_c == 448 || out_c == 576) ? 1 : 2;
-    x = conv_2d_batch_norm(m["conv2"], x, stride, 1, out_c);
+    int c_out = m.weights("conv2.c.weight")->ne[0];
+    int stride = (c_out == 320 || c_out == 448 || c_out == 576) ? 1 : 2;
+    x = conv_2d_batch_norm(m["conv2"], x, stride, 1, c_out);
     x = ggml_gelu_inplace(m, x);
 
     x = conv_2d_batch_norm(m["conv3"], x);
-    x = ggml_reshape_3d(m, x, x->ne[0] * x->ne[1], x->ne[2], x->ne[3]); // flatten(2)
-    x = ggml_transpose(m, x);
-    return x;
+    x = ggml_reshape_3d(m, x, x->ne[0], x->ne[1] * x->ne[2], x->ne[3]); // flatten(2) -> B HW C
+    return m.named(x);
 }
 
 inline Tensor mlp(Model m, Tensor x) {
@@ -185,27 +191,27 @@ inline Tensor mlp(Model m, Tensor x) {
     x = linear(m["fc1"], x);
     x = ggml_gelu_inplace(m, x);
     x = linear(m["fc2"], x);
-    return x;
+    return m.named(x);
 }
 
 inline Tensor attention_rel_bias(Model m, Tensor x, int dim, int num_heads) {
     GGML_ASSERT(dim % num_heads == 0);
     int key_dim = dim / num_heads;
-    int B = x->ne[2];
-    int N = x->ne[1];
+    int b = x->ne[2];
+    int n = x->ne[1];
 
     x = layer_norm(m["norm"], x);
 
     Tensor qkv = linear(m["qkv"], x);
-    qkv = ggml_reshape_4d(m, qkv, key_dim, 3, num_heads * N, B); // [B, N * num_heads, 3, key_dim]
-    qkv = ggml_cont(m, ggml_permute(m, qkv, 0, 3, 1, 2));        // [3, B, N * num_heads, key_dim]
+    qkv = ggml_reshape_4d(m, qkv, key_dim, 3, num_heads * n, b);
+    qkv = ggml_cont(m, ggml_permute(m, qkv, 0, 3, 1, 2)); // ne = [key_dim, num_heads * n, b, 3]
 
     // split([key_dim, key_dim, key_dim], dim=3)
     size_t offset = qkv->nb[3];
     auto split = [=](Model m, Tensor tensor, size_t index) {
         tensor = ggml_view_3d(
-            m, tensor, key_dim, num_heads * N, B, tensor->nb[1], tensor->nb[2], index * offset);
-        tensor = ggml_reshape_4d(m, tensor, key_dim, num_heads, N, B);
+            m, tensor, key_dim, num_heads * n, b, tensor->nb[1], tensor->nb[2], index * offset);
+        tensor = ggml_reshape_4d(m, tensor, key_dim, num_heads, n, b);
         return tensor;
     };
 
@@ -223,48 +229,45 @@ inline Tensor attention_rel_bias(Model m, Tensor x, int dim, int num_heads) {
 
     x = ggml_mul_mat(m, v, attn);                     // attn @ v
     x = ggml_cont(m, ggml_permute(m, x, 0, 2, 1, 3)); // transpose(1, 2)
-    x = ggml_reshape_3d(m, x, key_dim * num_heads, N, B);
+    x = ggml_reshape_3d(m, x, key_dim * num_heads, n, b);
     x = linear(m["proj"], x);
-    return x;
+
+    return m.named(x);
 }
 
 inline Tensor tiny_vit_block(Model m, Tensor x, int input_resolution, int dim, int num_heads,
                              int window_size) {
-    int H = input_resolution;
-    int W = input_resolution;
-    int B = x->ne[2];
-    int L = x->ne[1];
-    int C = x->ne[0];
-    GGML_ASSERT(L == H * W);
-    GGML_ASSERT(H != window_size && W != window_size);
+    int h = input_resolution;
+    int w = input_resolution;
+    int b = x->ne[2];
+    int spatial = x->ne[1];
+    int c = x->ne[0];
+    GGML_ASSERT(spatial == h * w);
+    GGML_ASSERT(h != window_size && w != window_size);
 
-    x = ggml_cont(m, x);
     Tensor res_x = x;
-    x = ggml_reshape_4d(m, x, C, W, H, B);
+    x = ggml_reshape_4d(m, x, c, w, h, b);
 
     // window partition
     x = ggml_win_part(m, x, window_size);
-    x = ggml_reshape_3d(m, x, C, window_size * window_size, x->ne[3]);
+    x = ggml_reshape_3d(m, x, c, window_size * window_size, x->ne[3]);
 
     x = attention_rel_bias(m["attn"], x, dim, num_heads);
 
     // window reverse
-    x = ggml_reshape_4d(m, x, C, window_size, window_size, x->ne[2]);
-    x = ggml_win_unpart(m, x, W, H, window_size);
+    x = ggml_reshape_4d(m, x, c, window_size, window_size, x->ne[2]);
+    x = ggml_win_unpart(m, x, w, h, window_size);
 
-    x = ggml_reshape_3d(m, x, C, L, B);
+    x = ggml_reshape_3d(m, x, c, spatial, b);
     x = ggml_add_inplace(m, x, res_x);
 
-    x = ggml_cont(m, ggml_transpose(m, x));
-    x = ggml_reshape_4d(m, x, W, H, C, B);
-
+    x = ggml_reshape_4d(m, x, c, w, h, b);
     x = conv_2d_batch_norm(m["local_conv"], x, 1, 1, /* groups */ dim);
-    x = ggml_reshape_3d(m, x, L, C, B);
-    x = ggml_cont(m, ggml_transpose(m, x));
+    x = ggml_reshape_3d(m, x, c, spatial, b);
 
     Tensor x_mlp = mlp(m["mlp"], x);
     x = ggml_add_inplace(m, x, x_mlp);
-    return x;
+    return m.named(x);
 }
 
 struct TinyViTParams {
@@ -283,7 +286,7 @@ struct TinyViTParams {
     int img_size = 1024;
     // clang-format off
     std::array<Layer, num_layers> layers = {
-        // reslution    dim     depth   attn heads  window size   downsample
+        // resolution   dim     depth   attn heads  window size   downsample
         Layer{256,      64,     2,      2,          7,              true},
         Layer{128,      128,    2,      4,          7,              true},
         Layer{64,       160,    6,      5,          14,             true},
@@ -297,7 +300,7 @@ inline Tensor conv_layer(Model m, Tensor x, TinyViTParams::Layer p) {
         x = mb_conv(block[i], x);
     }
     x = patch_merging(m["downsample"], x, p.resolution);
-    return x;
+    return m.named(x);
 }
 
 inline Tensor basic_layer(Model m, Tensor x, TinyViTParams::Layer const& p) {
@@ -308,7 +311,7 @@ inline Tensor basic_layer(Model m, Tensor x, TinyViTParams::Layer const& p) {
     if (p.downsample) {
         x = patch_merging(m["downsample"], x, p.resolution);
     }
-    return x;
+    return m.named(x);
 }
 
 inline Tensor tiny_vit(Model m, Tensor x, TinyViTParams const& p) {
@@ -320,16 +323,18 @@ inline Tensor tiny_vit(Model m, Tensor x, TinyViTParams const& p) {
         x = basic_layer(layers[i], x, p.layers[i]);
     }
 
-    int B = x->ne[2];
-    int C = x->ne[0];
-    x = ggml_reshape_4d(m, x, C, 64, 64, B);
-    x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3));
+    int b = x->ne[2];
+    int c = x->ne[0];
+    x = ggml_reshape_4d(m, x, c, 64, 64, b);
 
     // neck
-    x = conv_2d(m["neck.0"], x);
-    x = layer_norm_2d(m["neck.1"], x);
-    x = conv_2d(m["neck.2"], x, 1, 1);
-    x = layer_norm_2d(m["neck.3"], x);
+    x = conv_2d_channels(m["neck.0"], x);
+    x = layer_norm_2d_channels(m["neck.1"], x);
+    x = conv_2d_channels(m["neck.2"], x, 1, 1);
+    x = layer_norm_2d_channels(m["neck.3"], x);
+
+    // convert output to NCHW (TODO: make mask decoder work with NHWC)
+    x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3));
     return x;
 }
 

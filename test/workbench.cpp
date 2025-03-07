@@ -43,6 +43,7 @@ struct Workbench {
         model.graph = ggml_new_graph(model);
         backends[0] = ggml_backend_blas_init();
         backends[1] = ggml_backend_cpu_init();
+        ggml_backend_cpu_set_n_threads(backends[1], 1);
 
 
         for (int i = 0; i < input_count; ++i) {
@@ -102,8 +103,14 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
         auto w = dlimg::Workbench(input_count, inputs, output);
         Tensor input = w.model.weights("input");
 
-        if (name == "conv_2d_depth_wise") {
+        if (name == "conv_2d_depthwise_nchw_stride_1_pad_0") {
             w.output(conv_2d_depth_wise(w.model, input), output);
+        } else if (name == "conv_2d_depthwise_nchw_stride_2_pad_1") {
+            w.output(conv_2d_depth_wise(w.model, input, 2, 1), output);
+        } else if (name == "conv_2d_depthwise_nhwc_stride_1_pad_0") {
+            w.output(conv_2d_depth_wise_channels(w.model, input), output);
+        } else if (name == "conv_2d_depthwise_nhwc_stride_2_pad_1") {
+            w.output(conv_2d_depth_wise_channels(w.model, input, 2, 1), output);
         } else if (name == "conv_2d") {
             w.output(conv_2d(w.model, input), output);
         } else if (name == "conv_2d_channels") {            
