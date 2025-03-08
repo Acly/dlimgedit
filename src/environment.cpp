@@ -13,6 +13,18 @@
 #include <thread>
 
 namespace dlimg {
+namespace {
+
+template<typename F>
+F* get_function(dylib const& lib, char const* symbol_name) {
+    static_assert(sizeof(F*) == sizeof(dylib::native_symbol_type));
+    F* result;
+    auto symbol = lib.get_symbol(symbol_name);
+    std::memcpy(&result, &symbol, sizeof(dylib::native_symbol_type));
+    return result;
+}
+    
+} // namespace
 
 Path EnvironmentImpl::verify_path(std::string_view path) {
     Path const p = std::filesystem::absolute(path);
@@ -29,10 +41,10 @@ Path EnvironmentImpl::verify_path(std::string_view path) {
 bool has_cuda_device() {
     try {
         auto lib = dylib(is_linux ? "cuda" : "nvcuda");
-        auto cuInit = lib.get_function<int(unsigned int)>("cuInit");
-        auto cuDeviceGetCount = lib.get_function<int(int*)>("cuDeviceGetCount");
+        auto cuInit = get_function<int(unsigned int)>(lib, "cuInit");
+        auto cuDeviceGetCount = get_function<int(int*)>(lib, "cuDeviceGetCount");
         auto cuDeviceComputeCapability =
-            lib.get_function<int(int*, int*, int)>("cuDeviceComputeCapability");
+            get_function<int(int*, int*, int)>(lib, "cuDeviceComputeCapability");
         if (cuInit(0) != 0) {
             return false;
         }
@@ -68,7 +80,7 @@ bool has_dml_device() {
 #ifdef DLIMG_WINDOWS
     try {
         auto dxgi = dylib("Dxgi");
-        auto create_factory = dxgi.get_function<decltype(CreateDXGIFactory2)>("CreateDXGIFactory2");
+        auto create_factory = get_function<decltype(CreateDXGIFactory2)>(dxgi, "CreateDXGIFactory2");
 
         HRESULT result;
         IDXGIFactory2* dxgi_factory = nullptr;
@@ -91,7 +103,7 @@ bool has_dml_device() {
         }
 
         auto d3d12 = dylib("d3d12");
-        auto create_device = d3d12.get_function<decltype(D3D12CreateDevice)>("D3D12CreateDevice");
+        auto create_device = get_function<decltype(D3D12CreateDevice)>(d3d12, "D3D12CreateDevice");
         result = create_device(nullptr, D3D_FEATURE_LEVEL_11_0, _uuidof(ID3D12Device), nullptr);
         return SUCCEEDED(result);
     } catch (dylib::exception const&) {

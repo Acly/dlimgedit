@@ -5,13 +5,20 @@
 
 #include <Eigen/Dense>
 #include <onnxruntime_cxx_api.h>
-#ifdef _MSC_VER
+#if defined(_MSC_VER)
 #    pragma warning(push)
 #    pragma warning(disable : 4554)
 #endif
+#if defined(__clang__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wunused-but-set-variable"
+#endif
 #include <unsupported/Eigen/CXX11/Tensor>
-#ifdef _MSC_VER
+#if defined(_MSC_VER)
 #    pragma warning(pop)
+#endif
+#if defined(__clang__)
+#    pragma clang diagnostic pop
 #endif
 
 #include <array>
