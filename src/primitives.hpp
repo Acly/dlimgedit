@@ -78,16 +78,7 @@ inline Tensor batch_norm_2d(Model m, Tensor x, float eps = 1e-5f) {
     Tensor mean = m.weights("running_mean");
     Tensor weight = m.weights("weight");
     Tensor bias = m.weights("bias");
-
-    var = ggml_reshape_4d(m, var, var->ne[0], 1, 1, 1);
-    mean = ggml_reshape_4d(m, mean, mean->ne[0], 1, 1, 1);
-    weight = ggml_reshape_4d(m, weight, weight->ne[0], 1, 1, 1);
-    bias = ggml_reshape_4d(m, bias, bias->ne[0], 1, 1, 1);
-
-    x = ggml_sub_inplace(m, x, mean);
-    x = ggml_div_inplace(m, x, var);
-    x = ggml_mul_inplace(m, x, weight);
-    x = ggml_add_inplace(m, x, bias);
+    x = ggml_batch_norm_inplace(m, x, mean, var, weight, bias);
     return m.named(x);
 }
 

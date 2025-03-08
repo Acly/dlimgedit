@@ -112,15 +112,7 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
 
     ggml_backend_t backend_cpu = ggml_backend_cpu_init();
     ggml_backend_t backend_blas = ggml_backend_blas_init();
-    // ggml_backend_t backend = ggml_backend_vk_init(0);
-
-    // 
-    //
-    // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    // TODO: fix race in depthwise conv
-    // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    //
-    ggml_backend_cpu_set_n_threads(backend_cpu, 1);
+    ggml_backend_cpu_set_n_threads(backend_cpu, 6);
 
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(model_ctx, backend_cpu);
     ggml_backend_buffer_t buffer_blas = ggml_backend_alloc_ctx_tensors(model_ctx, backend_blas);
@@ -179,10 +171,10 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
         auto sched = ggml_backend_sched_new(
             backends, buffer_types, 2, ggml_graph_size(graph), false);
 
-        // Timer timer(graph, sched);
-        ggml_backend_sched_set_eval_callback(sched, debug_printer, nullptr);
+        Timer timer(graph, sched);
+        // ggml_backend_sched_set_eval_callback(sched, debug_printer, nullptr);
         ggml_backend_sched_graph_compute(sched, graph);
-        // timer.print();
+        timer.print();
 
         auto image_embeddings_out = ggml_graph_get_tensor(graph, "image_embeddings");
         image_embeddings_data.resize(ggml_nelements(image_embeddings_out));
