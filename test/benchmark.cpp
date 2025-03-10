@@ -113,6 +113,7 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
     ggml_backend_t backend_cpu = ggml_backend_cpu_init();
     ggml_backend_t backend_blas = ggml_backend_blas_init();
     ggml_backend_cpu_set_n_threads(backend_cpu, 6);
+    ggml_backend_blas_set_n_threads(backend_blas, 6);
 
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(model_ctx, backend_cpu);
     ggml_backend_buffer_t buffer_blas = ggml_backend_alloc_ctx_tensors(model_ctx, backend_blas);

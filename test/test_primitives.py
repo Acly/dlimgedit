@@ -74,7 +74,7 @@ def test_conv_2d_depth_wise(scenario: str, memory_layout: str):
     result = torch.zeros_like(expected)
     if memory_layout == "nhwc":
         x = to_channel_last(x)
-        k = k.permute(2, 3, 0, 1)
+        k = k.permute(2, 3, 1, 0)
         result = to_channel_last(result)
     workbench.invoke_test(f"conv_2d_depthwise_{memory_layout}_{scenario}", x, result, dict(weight=k))
     if memory_layout == "nhwc":

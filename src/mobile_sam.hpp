@@ -37,7 +37,6 @@ inline std::vector<float> preprocess_image(ImageView image) {
 
     auto input_pixel = PixelAccessor(image);
     std::vector<float> result(3 * image_size * image_size);
-    int result_stride = image_size * image_size;
     for (int y = 0; y < image_size; ++y) {
         for (int x = 0; x < image_size; ++x) {
             for (int c = 0; c < 3; ++c) {

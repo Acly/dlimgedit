@@ -46,7 +46,6 @@ def build_dense_positional_embeddings(
     return pe
 
 def conv_2d_kernel_to_nhwc(kernel: torch.Tensor):
-    # TODO: should be permute(2, 3, 0, 1) ?
     return kernel.permute(2, 3, 1, 0) # H W C_in C_out
 
 
