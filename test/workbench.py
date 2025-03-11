@@ -1,5 +1,6 @@
 import ctypes
 import torch
+import os
 
 from pathlib import Path
 
@@ -32,6 +33,7 @@ def to_raw_tensor(name: str, tensor: torch.Tensor):
     raw_tensor.n = tensor.size(0)
     return (raw_tensor, torch_tensor)
 
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE" # Some python lib (numpy? torch?) loads OpenMP
 
 root_dir = Path(__file__).parent.parent
 lib = ctypes.CDLL(str(root_dir / "build" / "bin" / "dlimgedit_workbench.dll"))

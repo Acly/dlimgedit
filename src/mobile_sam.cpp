@@ -1,0 +1,611 @@
+#include "mobile_sam.hpp"
+
+#include <ggml.h>
+
+#include <optional>
+
+namespace dlimg::sam {
+
+Tensor linear(Model m, Tensor x) {
+    x = ggml_mul_mat(m, m.weights("weight"), x);
+    if (Tensor bias = m.find("bias")) {
+        x = ggml_add_inplace(m, x, bias);
+    }
+    return x;
+}
+
+Tensor conv_2d(Model m, Tensor x, int stride, int pad) {
+    x = ggml_conv_2d_ext(m, m.weights("weight"), x, stride, stride, pad, pad, 1, 1, GGML_NHWC);
+    if (Tensor bias = m.find("bias")) {
+        bias = ggml_reshape_4d(m, bias, bias->ne[0], 1, 1, 1);
+        x = ggml_add_inplace(m, x, bias);
+    }
+    return x;
+}
+
+Tensor depthwise_conv_2d(Model m, Tensor x, int stride, int pad) {
+    return ggml_depthwise_conv_2d(m, m.weights("weight"), x, stride, stride, pad, pad, GGML_NHWC);
+}
+
+Tensor layer_norm(Model m, Tensor x, float eps) {
+    x = ggml_norm(m, x, eps);
+    x = ggml_mul_inplace(m, x, m.weights("weight"));
+    x = ggml_add_inplace(m, x, m.weights("bias"));
+    return m.named(x);
+}
+
+Tensor batch_norm_2d(Model m, Tensor x) {
+    Tensor var = m.weights("running_var"); // = sqrt(var + eps)
+    Tensor mean = m.weights("running_mean");
+    Tensor weight = m.weights("weight");
+    Tensor bias = m.weights("bias");
+    x = ggml_batch_norm_2d_inplace(m, x, mean, var, weight, bias);
+    return m.named(x);
+}
+
+//
+// Image encoder
+//
+
+float resize_longest_side(Extent extent, int target_longest_side) {
+    int longest_side = std::max(extent.width, extent.height);
+    return float(target_longest_side) / float(longest_side);
+}
+
+int scale_coord(int coord, float scale) { return int(coord * scale + 0.5f); }
+
+Extent scale_extent(Extent extent, float scale) {
+    return Extent(scale_coord(extent.width, scale), scale_coord(extent.height, scale));
+}
+
+std::vector<float> preprocess_image(ImageView image) {
+    constexpr float mean[] = {123.675f, 116.28f, 103.53f};
+    constexpr float std[] = {58.395f, 57.12f, 57.375f};
+
+    std::optional<Image> resized;
+    float scale = resize_longest_side(image.extent, image_size);
+    if (scale != 1) {
+        resized = resize(image, scale_extent(image.extent, scale));
+        image = ImageView(*resized);
+    }
+
+    auto input_pixel = PixelAccessor(image);
+    std::vector<float> result(3 * image_size * image_size);
+    for (int y = 0; y < image_size; ++y) {
+        for (int x = 0; x < image_size; ++x) {
+            for (int c = 0; c < 3; ++c) {
+                float value = float(input_pixel.get(image.pixels, x, y, c));
+                float normalized = (value - mean[c]) / std[c];
+                result[y * image_size * 3 + x * 3 + c] = normalized;
+            }
+        }
+    }
+    return result;
+}
+
+Tensor conv_2d_batch_norm(Model m, Tensor x, int stride, int pad, int groups) {
+    if (groups == 1) {
+        x = conv_2d(m["c"], x, stride, pad);
+    } else {
+        x = depthwise_conv_2d(m["c"], x, stride, pad);
+    }
+    x = batch_norm_2d(m["bn"], x);
+    return m.named(x);
+}
+
+Tensor patch_embed(Model m, Tensor x) {
+    x = conv_2d_batch_norm(m["seq.0"], x, 2, 1);
+    x = ggml_gelu_inplace(m, x);
+    x = conv_2d_batch_norm(m["seq.2"], x, 2, 1);
+    return m.named(x);
+}
+
+Tensor layer_norm_2d(Model m, Tensor x, float eps) {
+    Tensor weight = m.weights("weight");
+    weight = ggml_reshape_3d(m, weight, 1, 1, weight->ne[0]);
+    Tensor bias = m.weights("bias");
+    bias = ggml_reshape_3d(m, bias, 1, 1, bias->ne[0]);
+
+    x = ggml_cont(m, ggml_permute(m, x, 1, 2, 0, 3));
+    x = ggml_norm(m, x, eps);
+    x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3));
+    x = ggml_mul_inplace(m, x, weight);
+    x = ggml_add_inplace(m, x, bias);
+    ggml_set_name(x, "layer_norm_2d");
+    return x;
+}
+
+Tensor mb_conv(Model m, Tensor x) {
+    Tensor shortcut = x;
+
+    x = conv_2d_batch_norm(m["conv1"], x);
+    x = ggml_gelu_inplace(m, x);
+
+    x = conv_2d_batch_norm(m["conv2"], x, 1, 1, /* groups */ x->ne[2]);
+    x = ggml_gelu_inplace(m, x);
+
+    x = conv_2d_batch_norm(m["conv3"], x);
+    x = ggml_add_inplace(m, x, shortcut);
+    x = ggml_gelu_inplace(m, x);
+
+    return m.named(x);
+}
+
+Tensor patch_merging(Model m, Tensor x, int input_resolution) {
+    if (x->ne[2] == 1) {
+        x = ggml_reshape_4d(m, x, x->ne[0], input_resolution, input_resolution, x->ne[3]);
+    }
+    x = conv_2d_batch_norm(m["conv1"], x);
+    x = ggml_gelu_inplace(m, x);
+
+    int c_out = m.weights("conv2.c.weight")->ne[0];
+    int stride = (c_out == 320 || c_out == 448 || c_out == 576) ? 1 : 2;
+    x = conv_2d_batch_norm(m["conv2"], x, stride, 1, c_out);
+    x = ggml_gelu_inplace(m, x);
+
+    x = conv_2d_batch_norm(m["conv3"], x);
+    x = ggml_reshape_3d(m, x, x->ne[0], x->ne[1] * x->ne[2], x->ne[3]); // flatten(2) -> B HW C
+    return m.named(x);
+}
+
+Tensor mlp(Model m, Tensor x) {
+    x = layer_norm(m["norm"], x);
+
+    x = linear(m["fc1"], x);
+    x = ggml_gelu_inplace(m, x);
+    x = linear(m["fc2"], x);
+    return m.named(x);
+}
+
+Tensor attention_rel_bias(Model m, Tensor x, int dim, int num_heads) {
+    GGML_ASSERT(dim % num_heads == 0);
+    int key_dim = dim / num_heads;
+    int b = x->ne[2];
+    int n = x->ne[1];
+
+    x = layer_norm(m["norm"], x);
+
+    Tensor qkv = linear(m["qkv"], x);
+    qkv = ggml_reshape_4d(m, qkv, key_dim, 3, num_heads * n, b);
+    qkv = ggml_cont(m, ggml_permute(m, qkv, 0, 3, 1, 2)); // ne = [key_dim, num_heads * n, b, 3]
+
+    // split([key_dim, key_dim, key_dim], dim=3)
+    size_t offset = qkv->nb[3];
+    auto split = [=](Model m, Tensor tensor, size_t index) {
+        tensor = ggml_view_3d(
+            m, tensor, key_dim, num_heads * n, b, tensor->nb[1], tensor->nb[2], index * offset);
+        tensor = ggml_reshape_4d(m, tensor, key_dim, num_heads, n, b);
+        return tensor;
+    };
+
+    Tensor q = split(m, qkv, 0);
+    Tensor k = split(m, qkv, 1);
+    Tensor v = split(m, qkv, 2);
+    q = ggml_cont(m, ggml_permute(m, q, 0, 2, 1, 3));
+    k = ggml_cont(m, ggml_permute(m, k, 0, 2, 1, 3));
+    v = ggml_cont(m, ggml_permute(m, v, 1, 2, 0, 3)); // transpose for mul_mat later
+
+    Tensor attn = ggml_mul_mat(m, k, q); // q @ k (k is transposed in mul_mat)
+    attn = ggml_scale_inplace(m, attn, 1.0f / std::sqrtf(float(key_dim)));
+    attn = ggml_add_inplace(m, attn, m.weights("attention_biases_indexed"));
+    attn = ggml_soft_max(m, attn);
+
+    x = ggml_mul_mat(m, v, attn);                     // attn @ v
+    x = ggml_cont(m, ggml_permute(m, x, 0, 2, 1, 3)); // transpose(1, 2)
+    x = ggml_reshape_3d(m, x, key_dim * num_heads, n, b);
+    x = linear(m["proj"], x);
+
+    return m.named(x);
+}
+
+Tensor tiny_vit_block(Model m, Tensor x, int input_resolution, int dim, int num_heads,
+                      int window_size) {
+    int h = input_resolution;
+    int w = input_resolution;
+    int b = x->ne[2];
+    int spatial = x->ne[1];
+    int c = x->ne[0];
+    GGML_ASSERT(spatial == h * w);
+    GGML_ASSERT(h != window_size && w != window_size);
+
+    Tensor res_x = x;
+    x = ggml_reshape_4d(m, x, c, w, h, b);
+
+    // window partition
+    x = ggml_win_part(m, x, window_size);
+    x = ggml_reshape_3d(m, x, c, window_size * window_size, x->ne[3]);
+
+    x = attention_rel_bias(m["attn"], x, dim, num_heads);
+
+    // window reverse
+    x = ggml_reshape_4d(m, x, c, window_size, window_size, x->ne[2]);
+    x = ggml_win_unpart(m, x, w, h, window_size);
+
+    x = ggml_reshape_3d(m, x, c, spatial, b);
+    x = ggml_add_inplace(m, x, res_x);
+
+    x = ggml_reshape_4d(m, x, c, w, h, b);
+    x = conv_2d_batch_norm(m["local_conv"], x, 1, 1, /* groups */ dim);
+    x = ggml_reshape_3d(m, x, c, spatial, b);
+
+    Tensor x_mlp = mlp(m["mlp"], x);
+    x = ggml_add_inplace(m, x, x_mlp);
+    return m.named(x);
+}
+
+Tensor conv_layer(Model m, Tensor x, TinyViTParams::Layer p) {
+    auto block = m["blocks"];
+    for (int i = 0; i < p.depth; ++i) {
+        x = mb_conv(block[i], x);
+    }
+    x = patch_merging(m["downsample"], x, p.resolution);
+    return m.named(x);
+}
+
+Tensor basic_layer(Model m, Tensor x, TinyViTParams::Layer const& p) {
+    auto blocks = m["blocks"];
+    for (int i = 0; i < p.depth; ++i) {
+        x = tiny_vit_block(blocks[i], x, p.resolution, p.embed_dim, p.num_heads, p.window_size);
+    }
+    if (p.downsample) {
+        x = patch_merging(m["downsample"], x, p.resolution);
+    }
+    return m.named(x);
+}
+
+Tensor tiny_vit(Model m, Tensor x, TinyViTParams const& p) {
+    x = patch_embed(m["patch_embed"], x);
+    x = conv_layer(m["layers.0"], x, p.layers[0]);
+
+    auto layers = m["layers"];
+    for (int i = 1; i < p.num_layers; ++i) {
+        x = basic_layer(layers[i], x, p.layers[i]);
+    }
+
+    int b = x->ne[2];
+    int c = x->ne[0];
+    x = ggml_reshape_4d(m, x, c, 64, 64, b);
+
+    // neck
+    x = conv_2d(m["neck.0"], x);
+    x = layer_norm(m["neck.1"], x);
+    x = conv_2d(m["neck.2"], x, 1, 1);
+    x = layer_norm(m["neck.3"], x);
+
+    // convert output to NCHW (TODO: make mask decoder work with NHWC)
+    x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3));
+    return x;
+}
+
+//
+// Prompt encoder
+//
+
+float transform_coord(int p, float scale, int image_size) {
+    float center_normalized = (float(p) * scale + 0.5f) / float(image_size);
+    return 2.f * center_normalized - 1.f;
+}
+
+// Transforms a point from coordinates in the original input image (any resolution)
+// to input in [-1, 1] expected by the prompt encoder.
+std::array<float, 4> preprocess_prompt(Point point, Extent input_image_extent) {
+    float scale = resize_longest_side(input_image_extent, image_size);
+    float x = transform_coord(point.x, scale, image_size);
+    float y = transform_coord(point.y, scale, image_size);
+    return std::array{x, y, 0.f, 0.f};
+}
+
+Tensor position_embedding_random(Model m, Tensor coords) {
+    constexpr float pi = 3.14159265358979323846f;
+
+    Tensor pe = m.weights("positional_encoding_gaussian_matrix");
+    pe = ggml_cont(m, ggml_transpose(m, pe));
+    coords = ggml_mul_mat(m, pe, coords);
+    coords = ggml_scale_inplace(m, coords, 2.f * pi);
+    Tensor coords_sin = ggml_sin(m, coords);
+    Tensor coords_cos = ggml_cos(m, coords);
+    return ggml_concat(m, coords_sin, coords_cos, 0);
+}
+
+Tensor embed_points(Model m, Tensor coords) {
+    int64_t count = coords->ne[1] - 1; // last element is sentinel
+    Tensor x = position_embedding_random(m["pe_layer"], coords);
+
+    // Write "not_a_point_embed" value into the last coordinate
+    Tensor label_end = ggml_view_2d(m, x, x->ne[0], 1, x->nb[1], /*offset*/ count * x->nb[1]);
+    label_end = ggml_cpy(m, m.weights("not_a_point_embed.weight"), label_end);
+    ggml_build_forward_expand(m.graph, label_end);
+
+    // Add point_embeddings[1] weight to all foreground points (prior coordinates)
+    Tensor label_one = ggml_view_2d(m, x, x->ne[0], count, x->nb[1], /* offset */ 0);
+    label_one = ggml_add_inplace(m, label_one, m.weights("point_embeddings.1.weight"));
+    ggml_build_forward_expand(m.graph, label_one);
+
+    // NOTE: background points are not handled
+    return x;
+}
+
+Tensor no_mask_embed(Model m, int embedding_size) {
+    Tensor dense = m.weights("no_mask_embed.weight");
+    dense = ggml_reshape_4d(m, dense, 1, 1, dense->ne[0], 1);
+    dense = ggml_repeat(
+        m, dense,
+        ggml_new_tensor_4d(m, GGML_TYPE_F32, embedding_size, embedding_size, dense->ne[2], 1));
+    return dense;
+}
+
+EncodePromptResult encode_prompt(Model m, Tensor point_coords) {
+    int image_size = 1024;
+    int image_embedding_size = image_size / 16;
+
+    EncodePromptResult result;
+    result.sparse = embed_points(m, point_coords);
+    result.dense = no_mask_embed(m, image_embedding_size);
+    return result;
+}
+
+//
+// Mask Decoder
+//
+
+Tensor mlp_block(Model m, Tensor x) {
+    x = linear(m["lin1"], x);
+    x = ggml_relu_inplace(m, x);
+    x = linear(m["lin2"], x);
+    return x;
+}
+
+Tensor separate_attention_heads(Model m, Tensor x, int num_heads) {
+    x = ggml_reshape_4d(m, x, x->ne[0] / num_heads, num_heads, x->ne[1], x->ne[2]);
+    x = ggml_cont(m, ggml_permute(m, x, 0, 2, 1, 3));
+    return x;
+}
+
+Tensor attention(Model m, Tensor q, Tensor k, Tensor v, int num_heads) {
+    q = linear(m["q_proj"], q);
+    k = linear(m["k_proj"], k);
+    v = linear(m["v_proj"], v);
+
+    q = separate_attention_heads(m, q, num_heads);
+    k = separate_attention_heads(m, k, num_heads);
+    v = ggml_reshape_4d(m, v, v->ne[0] / num_heads, num_heads, v->ne[1], v->ne[2]);
+    v = ggml_cont(m, ggml_permute(m, v, 1, 2, 0, 3)); // already transposed for mul_mat
+
+    Tensor attn = ggml_mul_mat(m, k, q);
+    attn = ggml_scale_inplace(m, attn, 1.0f / std::sqrtf(float(q->ne[0])));
+    attn = ggml_soft_max(m, attn);
+
+    Tensor out = ggml_mul_mat(m, v, attn);
+    out = ggml_cont(m, ggml_permute(m, out, 0, 2, 1, 3));
+    out = ggml_reshape_3d(m, out, out->ne[0] * out->ne[1], out->ne[2], out->ne[3]);
+    out = linear(m["out_proj"], out);
+    return out;
+}
+
+auto two_way_attention_block(Model m, Tensor queries, Tensor keys, Tensor query_pe, Tensor key_pe,
+                             int num_heads, bool skip_first_layer_pe)
+    -> std::tuple<Tensor, Tensor> {
+    // Self attention block
+    if (skip_first_layer_pe) {
+        queries = attention(m["self_attn"], queries, queries, queries, num_heads);
+    } else {
+        Tensor q = ggml_add(m, queries, query_pe);
+        Tensor attn_out = attention(m["self_attn"], q, q, queries, num_heads);
+        queries = ggml_add(m, queries, attn_out);
+    }
+    queries = layer_norm(m["norm1"], queries);
+
+    // Cross attention block, tokens attending to image embedding
+    Tensor q = ggml_add(m, queries, query_pe);
+    Tensor k = ggml_add(m, keys, key_pe);
+    Tensor attn_out = attention(m["cross_attn_t2i"], q, k, keys, num_heads);
+    queries = ggml_add_inplace(m, queries, attn_out);
+    queries = layer_norm(m["norm2"], queries);
+
+    // MLP block
+    Tensor mlp_out = mlp_block(m["mlp"], queries);
+    queries = ggml_add_inplace(m, queries, mlp_out);
+    queries = layer_norm(m["norm3"], queries);
+
+    // ???: without this queries is overwritten by keys = keys + attn_out
+    queries = ggml_cont(m, queries);
+
+    // Cross attention block, image embedding attending to tokens
+    q = ggml_add(m, queries, query_pe);
+    // k = ggml_add(m, keys, key_pe); // redundant, same as above
+    attn_out = attention(m["cross_attn_i2t"], k, q, queries, num_heads);
+    keys = ggml_add_inplace(m, keys, attn_out);
+    keys = layer_norm(m["norm4"], keys);
+
+    return {queries, keys};
+}
+
+auto two_way_transformer(Model m, Tensor image_embedding, Tensor image_pe, Tensor point_embedding,
+                         int depth, int num_heads) -> std::tuple<Tensor, Tensor> {
+    int w = image_embedding->ne[0];
+    int h = image_embedding->ne[1];
+    int c = image_embedding->ne[2];
+    int b = image_embedding->ne[3];
+    // [B C H W] -> [B HW C]
+    image_embedding = ggml_reshape_3d(m, image_embedding, w * h, c, b);
+    image_embedding = ggml_cont(m, ggml_permute(m, image_embedding, 1, 0, 2, 3));
+    image_pe = ggml_reshape_3d(m, image_pe, w * h, c, b);
+    image_pe = ggml_cont(m, ggml_permute(m, image_pe, 1, 0, 2, 3));
+
+    Tensor queries = point_embedding;
+    Tensor keys = image_embedding;
+
+    // Apply transformer blocks and final layer norm
+    Model layers = m["layers"];
+    for (int i = 0; i < depth; ++i) {
+        bool skip_first_layer_pe = i == 0;
+        std::tie(queries, keys) = two_way_attention_block(
+            layers[i], queries, keys, point_embedding, image_pe, num_heads, skip_first_layer_pe);
+    }
+
+    // Apply the final attention layer from the points to the image
+    Tensor q = ggml_add(m, queries, point_embedding);
+    Tensor k = ggml_add(m, keys, image_pe);
+    Tensor attn_out = attention(m["final_attn_t2i"], q, k, keys, num_heads);
+    queries = ggml_add_inplace(m, queries, attn_out);
+    queries = layer_norm(m["norm_final_attn"], queries);
+
+    return {queries, keys};
+}
+
+Tensor conv_transpose_2d(Model m, Tensor x, int stride) {
+    // TODO: ggml_conv_transpose_2d_p0 expects fp16 weights
+    Tensor weight = ggml_cast(m, m.weights("weight"), GGML_TYPE_F16);
+    Tensor bias = m.weights("bias");
+    bias = ggml_reshape_3d(m, bias, 1, 1, bias->ne[0]);
+    x = ggml_conv_transpose_2d_p0(m, weight, x, stride);
+    x = ggml_add_inplace(m, x, bias);
+    return x;
+}
+
+Tensor upscale_outputs(Model m, Tensor x) {
+    x = conv_transpose_2d(m[0], x, 2);
+    x = layer_norm_2d(m[1], x);
+    x = ggml_gelu_inplace(m, x);
+    x = conv_transpose_2d(m[3], x, 2);
+    x = ggml_gelu_inplace(m, x);
+    return x;
+}
+
+Tensor hypernetwork_mlp(Model m, Tensor x, int num_layers) {
+    Model layers = m["layers"];
+    for (int i = 0; i < num_layers; ++i) {
+        x = linear(layers[i], x);
+        if (i < num_layers - 1) {
+            x = ggml_relu_inplace(m, x);
+        }
+    }
+    return x;
+}
+
+Tensor slice_2d(Model m, Tensor x, int index, int dim) {
+    GGML_ASSERT(dim == 1);
+    size_t offset = index * x->nb[dim];
+    return ggml_view_2d(m, x, x->ne[0], x->ne[2], x->nb[dim], offset);
+}
+
+MaskPrediction predict_masks(Model m, Tensor image_embeddings, Tensor sparse_prompt,
+                             Tensor dense_prompt, int image_embed_size) {
+    const int num_heads = 8;
+    const int transformer_depth = 2;
+    const int num_mask_tokens = 4; // num_multimask_outputs + 1
+
+    // Concatenate output tokens
+    int64_t prompt_size = sparse_prompt->ne[2];
+    Tensor output_tokens = ggml_concat(
+        m, m.weights("iou_token.weight"), m.weights("mask_tokens.weight"), 1);
+    output_tokens = ggml_repeat(m, output_tokens,
+                                ggml_new_tensor_3d(m, GGML_TYPE_F32, output_tokens->ne[0],
+                                                   output_tokens->ne[1], prompt_size));
+    Tensor tokens = ggml_concat(m, output_tokens, sparse_prompt, 1);
+
+    // Expand per-image data in batch direction to be per-mask
+    Tensor src = ggml_new_tensor_4d(m, GGML_TYPE_F32, image_embeddings->ne[0],
+                                    image_embeddings->ne[1], image_embeddings->ne[2],
+                                    tokens->ne[2]);
+    src = ggml_repeat(m, image_embeddings, src);
+    src = ggml_add_inplace(m, src, dense_prompt);
+
+    Tensor image_pe = m.weights("dense_positional_embedding");
+    Tensor pos_src = ggml_new_tensor_4d(
+        m, GGML_TYPE_F32, image_pe->ne[0], image_pe->ne[1], image_pe->ne[2], tokens->ne[3]);
+    pos_src = ggml_repeat(m, image_pe, pos_src);
+
+    int b = src->ne[3];
+    int c = src->ne[2];
+    int h = src->ne[1];
+    int w = src->ne[0];
+
+    // Run the transformer
+    auto [hs, out] = two_way_transformer(
+        m["transformer"], src, pos_src, tokens, transformer_depth, num_heads);
+    Tensor iou_token_out = ggml_view_2d(m, hs, hs->ne[0], hs->ne[2], hs->nb[2], 0);
+    Tensor mask_tokens_out = ggml_view_3d(m, hs, hs->ne[0], num_mask_tokens, hs->ne[2], hs->nb[1],
+                                          num_mask_tokens * hs->nb[1],
+                                          /* offset */ hs->nb[1]);
+
+    // Upscale mask embeddings and predict masks using the mask tokens
+    out = ggml_cont(m, ggml_transpose(m, out));
+    out = ggml_reshape_4d(m, out, w, h, c, b);
+    Tensor upscaled_embedding = upscale_outputs(m["output_upscaling"], out);
+    b = upscaled_embedding->ne[3];
+    c = upscaled_embedding->ne[2];
+    h = upscaled_embedding->ne[1];
+    w = upscaled_embedding->ne[0];
+    upscaled_embedding = ggml_reshape_3d(m, upscaled_embedding, w * h, c, b);
+    upscaled_embedding = ggml_cont(m, ggml_transpose(m, upscaled_embedding));
+
+    Tensor hyper_in = ggml_new_tensor_3d(
+        m, GGML_TYPE_F32, image_embed_size, num_mask_tokens, mask_tokens_out->ne[2]);
+    Model mlps = m["output_hypernetworks_mlps"];
+    for (int i = 0; i < num_mask_tokens; ++i) {
+        Tensor mask_slice = slice_2d(m, mask_tokens_out, i, 1);
+        mask_slice = hypernetwork_mlp(mlps[i], mask_slice, 3);
+        Tensor dest_slice = slice_2d(m, hyper_in, i, 1);
+        dest_slice = ggml_cpy(m, mask_slice, dest_slice);
+        ggml_build_forward_expand(m.graph, dest_slice);
+    }
+    Tensor masks = ggml_mul_mat(m, upscaled_embedding, hyper_in);
+    masks = ggml_reshape_4d(m, masks, w, h, masks->ne[1], b);
+
+    // Generate mask quality predictions
+    Tensor iou_pred = hypernetwork_mlp(m["iou_prediction_head"], iou_token_out, 3);
+
+    return {masks, iou_pred};
+}
+
+template <typename Tsrc, typename Tdst, typename Fconvert>
+void interpolate_bilinear(Tsrc const* src_pixels, Extent src_extent, int src_stride,
+                          Tdst* dst_pixels, Extent dst_extent, int dst_stride, Fconvert&& convert) {
+
+    float scale_x = float(src_extent.width) / float(dst_extent.width);
+    float scale_y = float(src_extent.height) / float(dst_extent.height);
+
+    for (int y = 0; y < dst_extent.height; ++y) {
+        for (int x = 0; x < dst_extent.width; ++x) {
+            float src_xf = std::max((x + 0.5f) * scale_x - 0.5f, 0.0f);
+            float src_yf = std::max((y + 0.5f) * scale_y - 0.5f, 0.0f);
+            int src_x0 = std::max(int(src_xf), 0);
+            int src_y0 = std::max(int(src_yf), 0);
+            int src_x1 = std::min(src_x0 + 1, src_extent.width - 1);
+            int src_y1 = std::min(src_y0 + 1, src_extent.height - 1);
+
+            float v00 = src_pixels[src_y0 * src_stride + src_x0];
+            float v01 = src_pixels[src_y0 * src_stride + src_x1];
+            float v10 = src_pixels[src_y1 * src_stride + src_x0];
+            float v11 = src_pixels[src_y1 * src_stride + src_x1];
+
+            float wx = src_xf - src_x0;
+            float wy = src_yf - src_y0;
+            float v0 = (1 - wx) * v00 + wx * v01;
+            float v1 = (1 - wx) * v10 + wx * v11;
+            float value = (1 - wy) * v0 + wy * v1;
+
+            dst_pixels[y * dst_stride + x] = convert(value);
+        }
+    }
+}
+
+Image postprocess_mask(std::span<float const> mask_data, Extent target_extent) {
+    float scale = resize_longest_side(target_extent, image_size);
+    auto scaled_extent = scale_extent(target_extent, scale);
+    auto mask = Image(target_extent, Channels::mask);
+
+    auto scaled = std::vector<float>(image_size * image_size);
+    auto id = [](float x) { return x; };
+    interpolate_bilinear(mask_data.data(), {mask_size, mask_size}, mask_size, scaled.data(),
+                         {image_size, image_size}, image_size, id);
+
+    auto threshold = [](float x) { return uint8_t(x > 0.0f ? 255 : 0); };
+    interpolate_bilinear(scaled.data(), scaled_extent, image_size, mask.pixels(), target_extent,
+                         target_extent.width, threshold);
+
+    return mask;
+}
+
+} // namespace dlimg::sam

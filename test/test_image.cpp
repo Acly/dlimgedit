@@ -11,9 +11,9 @@ TEST_CASE("Image formats", "[image]") {
     auto channels =
         GENERATE(Channels::mask, Channels::rgb, Channels::rgba, Channels::bgra, Channels::argb);
     auto const img = Image(Extent{8, 6}, channels);
-    CHECK(img.size() == 8 * 6 * count(channels));
-    CHECK(img.size() <= 8 * 6 * 4);
-    CHECK(img.size() >= 8 * 6 * 1);
+    CHECK(img.size() == size_t(8 * 6 * count(channels)));
+    CHECK(img.size() <= size_t(8 * 6 * 4));
+    CHECK(img.size() >= size_t(8 * 6 * 1));
 }
 
 TEST_CASE("Image load", "[image]") {

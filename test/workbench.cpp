@@ -1,5 +1,4 @@
 #include "mobile_sam.hpp"
-#include "primitives.hpp"
 
 #include <fmt/format.h>
 #include <ggml-blas.h>
@@ -18,6 +17,15 @@
 #endif
 
 namespace dlimg {
+
+Tensor conv_2d_nchw(Model m, Tensor x, int stride = 1, int pad = 0) {
+    return ggml_conv_2d_ext(m, m.weights("weight"), x, stride, stride, pad, pad, 1, 1, GGML_NCHW);
+}
+
+Tensor depthwise_conv_2d_nchw(Model m, Tensor x, int stride = 1, int pad = 0) {
+    return ggml_depthwise_conv_2d(m, m.weights("weight"), x, stride, stride, pad, pad, GGML_NCHW);
+}
+
 
 struct RawTensor {
     char const* name;
@@ -104,17 +112,17 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
         Tensor input = w.model.weights("input");
 
         if (name == "conv_2d_depthwise_nchw_stride_1_pad_0") {
-            w.output(conv_2d_depth_wise(w.model, input), output);
+            w.output(depthwise_conv_2d_nchw(w.model, input), output);
         } else if (name == "conv_2d_depthwise_nchw_stride_2_pad_1") {
-            w.output(conv_2d_depth_wise(w.model, input, 2, 1), output);
+            w.output(depthwise_conv_2d_nchw(w.model, input, 2, 1), output);
         } else if (name == "conv_2d_depthwise_nhwc_stride_1_pad_0") {
-            w.output(conv_2d_depth_wise_channels(w.model, input), output);
+            w.output(depthwise_conv_2d(w.model, input), output);
         } else if (name == "conv_2d_depthwise_nhwc_stride_2_pad_1") {
-            w.output(conv_2d_depth_wise_channels(w.model, input, 2, 1), output);
+            w.output(depthwise_conv_2d(w.model, input, 2, 1), output);
         } else if (name == "conv_2d") {
-            w.output(conv_2d(w.model, input), output);
+            w.output(conv_2d_nchw(w.model, input), output);
         } else if (name == "conv_2d_channels") {            
-            w.output(conv_2d_channels(w.model, input), output);
+            w.output(conv_2d(w.model, input), output);
         } else if (name == "batch_norm_2d") {
             w.output(batch_norm_2d(w.model, input), output);
         } else if (name == "layer_norm") {

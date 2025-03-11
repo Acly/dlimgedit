@@ -4,6 +4,7 @@ target_sources(dlimgedit PRIVATE
   dlimgedit.cpp
   environment.cpp
   image.cpp
+  mobile_sam.cpp
   tensor.cpp
   segmentation.cpp
   session.cpp
@@ -15,7 +16,7 @@ target_include_directories(dlimgedit PUBLIC
   PRIVATE .
 )
 target_link_libraries(dlimgedit
-  PRIVATE fmt onnxruntime stb Eigen3::Eigen dylib
+  PRIVATE fmt onnxruntime stb Eigen3::Eigen dylib ggml
 )
 set_target_properties(dlimgedit PROPERTIES
   VERSION ${PROJECT_VERSION}

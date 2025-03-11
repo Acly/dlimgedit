@@ -7,5 +7,5 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(stb)
 
-add_library(stb stb.cpp)
+add_library(stb STATIC stb.cpp)
 target_include_directories(stb PUBLIC ${stb_SOURCE_DIR})
