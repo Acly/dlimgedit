@@ -82,7 +82,7 @@ bool debug_printer(Tensor t, bool ask, void* user_data) {
     return !ask;
 }
 
-void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point const& point,
+void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region const& region,
                    Path const& output_path) {
 
     ggml_context* data_ctx = nullptr;
@@ -213,12 +213,13 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
         ggml_set_name(point_coords, "point_coords");
         ggml_set_input(point_coords);
 
-        auto prompt_embeddings = sam::encode_prompt(model["prompt_encoder"], point_coords);
-        ggml_set_name(prompt_embeddings.sparse, "sparse_prompt");
-        ggml_set_name(prompt_embeddings.dense, "dense_prompt");
+        // auto prompt_embeddings = sam::embed_points(model["prompt_encoder"], point_coords);
+        auto prompt_embeddings = sam::embed_box(model["prompt_encoder"], point_coords);
+        ggml_set_name(prompt_embeddings, "sparse_prompt");
+        auto dense_prompt = sam::no_mask_embed(model["prompt_encoder"]);
 
         auto [masks, iou] = sam::predict_masks(
-            model["dec"], image_embeddings, prompt_embeddings.sparse, prompt_embeddings.dense);
+            model["dec"], image_embeddings, prompt_embeddings, dense_prompt);
         ggml_set_name(masks, "masks");
         ggml_set_name(iou, "iou");
         ggml_set_output(masks);
@@ -236,7 +237,7 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
         ggml_backend_tensor_set(
             image_embeddings, image_embeddings_data.data(), 0, ggml_nbytes(image_embeddings));
 
-        auto points = sam::preprocess_prompt(point, input_image.extent());
+        auto points = sam::preprocess_prompt(region, input_image.extent());
         ggml_tensor* point_coords = ggml_graph_get_tensor(graph, "point_coords");
         ggml_backend_tensor_set(point_coords, points.data(), 0, ggml_nbytes(point_coords));
 
@@ -262,7 +263,7 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
 
     auto time_mask_decode = std::chrono::steady_clock::now();
 
-    int chosen_mask = 3;
+    int chosen_mask = 2;
     auto filepath = std::format("{}_mask.png", output_path.string());
     auto data = std::span(mask_data).subspan(chosen_mask * n * n, n * n);
     auto output_mask_img = sam::postprocess_mask(data, input_image.extent());
@@ -287,6 +288,7 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Point 
 
 int main(int argc, char** argv) {
     dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
-                         dlimg::Point{320, 210}, "test/result/sam_ggml");
+                         dlimg::Region{dlimg::Point{180, 110}, dlimg::Extent{325, 220}},
+                         "test/result/sam_ggml");
     return 0;
 }

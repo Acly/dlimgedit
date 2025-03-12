@@ -100,21 +100,6 @@ Tensor patch_embed(Model m, Tensor x) {
     return m.named(x);
 }
 
-Tensor layer_norm_2d(Model m, Tensor x, float eps) {
-    Tensor weight = m.weights("weight");
-    weight = ggml_reshape_3d(m, weight, 1, 1, weight->ne[0]);
-    Tensor bias = m.weights("bias");
-    bias = ggml_reshape_3d(m, bias, 1, 1, bias->ne[0]);
-
-    x = ggml_cont(m, ggml_permute(m, x, 1, 2, 0, 3));
-    x = ggml_norm(m, x, eps);
-    x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3));
-    x = ggml_mul_inplace(m, x, weight);
-    x = ggml_add_inplace(m, x, bias);
-    ggml_set_name(x, "layer_norm_2d");
-    return x;
-}
-
 Tensor mb_conv(Model m, Tensor x) {
     Tensor shortcut = x;
 
@@ -295,6 +280,15 @@ std::array<float, 4> preprocess_prompt(Point point, Extent input_image_extent) {
     return std::array{x, y, 0.f, 0.f};
 }
 
+std::array<float, 4> preprocess_prompt(Region region, Extent input_image_extent) {
+    float scale = resize_longest_side(input_image_extent, image_size);
+    float x0 = transform_coord(region.top_left.x, scale, image_size);
+    float y0 = transform_coord(region.top_left.y, scale, image_size);
+    float x1 = transform_coord(region.bottom_right.x, scale, image_size);
+    float y1 = transform_coord(region.bottom_right.y, scale, image_size);
+    return std::array{x0, y0, x1, y1};
+}
+
 Tensor position_embedding_random(Model m, Tensor coords) {
     constexpr float pi = 3.14159265358979323846f;
 
@@ -325,6 +319,23 @@ Tensor embed_points(Model m, Tensor coords) {
     return x;
 }
 
+Tensor embed_box(Model m, Tensor coords) {
+    // Handles a box defined by two points
+    coords = ggml_reshape_3d(m, coords, 2, 2, 1);
+    Tensor x = position_embedding_random(m["pe_layer"], coords);
+
+    // Add point_embeddings[2] to the first corner and point_embeddings[3] to the second corner
+    Tensor corner1 = ggml_view_2d(m, x, x->ne[0], 1, x->nb[1], /* offset */ 0);
+    corner1 = ggml_add_inplace(m, corner1, m.weights("point_embeddings.2.weight"));
+    ggml_build_forward_expand(m.graph, corner1);
+
+    Tensor corner2 = ggml_view_2d(m, x, x->ne[0], 1, x->nb[1], /* offset */ x->nb[1]);
+    corner2 = ggml_add_inplace(m, corner2, m.weights("point_embeddings.3.weight"));
+    ggml_build_forward_expand(m.graph, corner2);
+
+    return x;
+}
+
 Tensor no_mask_embed(Model m, int embedding_size) {
     Tensor dense = m.weights("no_mask_embed.weight");
     dense = ggml_reshape_4d(m, dense, 1, 1, dense->ne[0], 1);
@@ -332,16 +343,6 @@ Tensor no_mask_embed(Model m, int embedding_size) {
         m, dense,
         ggml_new_tensor_4d(m, GGML_TYPE_F32, embedding_size, embedding_size, dense->ne[2], 1));
     return dense;
-}
-
-EncodePromptResult encode_prompt(Model m, Tensor point_coords) {
-    int image_size = 1024;
-    int image_embedding_size = image_size / 16;
-
-    EncodePromptResult result;
-    result.sparse = embed_points(m, point_coords);
-    result.dense = no_mask_embed(m, image_embedding_size);
-    return result;
 }
 
 //
@@ -422,10 +423,7 @@ auto two_way_attention_block(Model m, Tensor queries, Tensor keys, Tensor query_
 
 auto two_way_transformer(Model m, Tensor image_embedding, Tensor image_pe, Tensor point_embedding,
                          int depth, int num_heads) -> std::tuple<Tensor, Tensor> {
-    int w = image_embedding->ne[0];
-    int h = image_embedding->ne[1];
-    int c = image_embedding->ne[2];
-    int b = image_embedding->ne[3];
+    auto [w, h, c, b] = nelements(image_embedding);
     // [B C H W] -> [B HW C]
     image_embedding = ggml_reshape_3d(m, image_embedding, w * h, c, b);
     image_embedding = ggml_cont(m, ggml_permute(m, image_embedding, 1, 0, 2, 3));
@@ -460,6 +458,21 @@ Tensor conv_transpose_2d(Model m, Tensor x, int stride) {
     bias = ggml_reshape_3d(m, bias, 1, 1, bias->ne[0]);
     x = ggml_conv_transpose_2d_p0(m, weight, x, stride);
     x = ggml_add_inplace(m, x, bias);
+    return x;
+}
+
+Tensor layer_norm_2d(Model m, Tensor x, float eps) {
+    Tensor weight = m.weights("weight");
+    weight = ggml_reshape_3d(m, weight, 1, 1, weight->ne[0]);
+    Tensor bias = m.weights("bias");
+    bias = ggml_reshape_3d(m, bias, 1, 1, bias->ne[0]);
+
+    x = ggml_cont(m, ggml_permute(m, x, 1, 2, 0, 3));
+    x = ggml_norm(m, x, eps);
+    x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3));
+    x = ggml_mul_inplace(m, x, weight);
+    x = ggml_add_inplace(m, x, bias);
+    ggml_set_name(x, "layer_norm_2d");
     return x;
 }
 
@@ -505,9 +518,8 @@ MaskPrediction predict_masks(Model m, Tensor image_embeddings, Tensor sparse_pro
     Tensor tokens = ggml_concat(m, output_tokens, sparse_prompt, 1);
 
     // Expand per-image data in batch direction to be per-mask
-    Tensor src = ggml_new_tensor_4d(m, GGML_TYPE_F32, image_embeddings->ne[0],
-                                    image_embeddings->ne[1], image_embeddings->ne[2],
-                                    tokens->ne[2]);
+    auto [ie0, ie1, ie2, _] = nelements(image_embeddings);
+    Tensor src = ggml_new_tensor_4d(m, GGML_TYPE_F32, ie0, ie1, ie2, tokens->ne[2]);
     src = ggml_repeat(m, image_embeddings, src);
     src = ggml_add_inplace(m, src, dense_prompt);
 
@@ -516,12 +528,8 @@ MaskPrediction predict_masks(Model m, Tensor image_embeddings, Tensor sparse_pro
         m, GGML_TYPE_F32, image_pe->ne[0], image_pe->ne[1], image_pe->ne[2], tokens->ne[3]);
     pos_src = ggml_repeat(m, image_pe, pos_src);
 
-    int b = src->ne[3];
-    int c = src->ne[2];
-    int h = src->ne[1];
-    int w = src->ne[0];
-
     // Run the transformer
+    auto [w, h, c, b] = nelements(src);
     auto [hs, out] = two_way_transformer(
         m["transformer"], src, pos_src, tokens, transformer_depth, num_heads);
     Tensor iou_token_out = ggml_view_2d(m, hs, hs->ne[0], hs->ne[2], hs->nb[2], 0);

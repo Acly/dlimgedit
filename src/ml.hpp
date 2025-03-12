@@ -12,6 +12,10 @@ using TensorName = FixedString<GGML_MAX_NAME>;
 using Tensor = ggml_tensor*;
 using Shape4 = std::array<int64_t, 4>;
 
+Shape4 nelements(Tensor t) {
+    return {t->ne[0], t->ne[1], t->ne[2], t->ne[3]};
+}
+
 struct Model {
     ggml_context* model_context = nullptr;
     ggml_context* graph_context = nullptr;

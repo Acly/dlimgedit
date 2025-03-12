@@ -6,8 +6,17 @@ import pytest
 from torch import Tensor
 
 from . import workbench
+from .workbench import to_channel_last, revert_channel_last
 
 torch.set_printoptions(precision=2, linewidth=200, edgeitems=8)
+
+
+def convert_to_channel_last(state: dict[str, torch.Tensor], key="c.weight"):
+    for k, v in state.items():
+        if k.endswith(key):
+            state[k] = v.permute(2, 3, 1, 0).contiguous()
+    return state
+
 
 #
 # Image Encoder
@@ -31,7 +40,7 @@ class Conv2d_BN(torch.nn.Sequential):
 def add_variance_epsilon(state: dict[str, torch.Tensor], epsilon=1e-5):
     for k in state:
         if k.endswith("running_var"):
-            state[k] = state[k].add_(1e-5).contiguous()
+            state[k] = torch.sqrt(state[k] + 1e-5).contiguous()
 
 
 def test_conv_2d_batch_norm():
@@ -44,8 +53,11 @@ def test_conv_2d_batch_norm():
     expected = conv2dbn(x)
 
     add_variance_epsilon(state)
-    result = torch.zeros_like(expected)
+    convert_to_channel_last(state)
+    x = to_channel_last(x)
+    result = to_channel_last(torch.zeros_like(expected))
     workbench.invoke_test("conv_2d_batch_norm", x, result, state)
+    result = revert_channel_last(result)
 
     assert torch.allclose(result, expected)
 
@@ -86,8 +98,11 @@ def test_patch_embed():
     expected = patch_embed(x)
 
     add_variance_epsilon(state)
-    result = torch.zeros_like(expected).contiguous()
+    convert_to_channel_last(state)
+    x = to_channel_last(x)
+    result = to_channel_last(torch.zeros_like(expected))
     workbench.invoke_test("patch_embed", x, result, state)
+    result = revert_channel_last(result)
 
     assert torch.allclose(result, expected, rtol=0.001, atol=0.02)
 
@@ -116,8 +131,10 @@ def test_layer_norm_2d():
     x = torch.rand(1, 4, 8, 8)
     expected = layer_norm(x)
 
-    result = torch.zeros_like(expected).contiguous()
-    workbench.invoke_test("layer_norm_2d", x, result, state)
+    x = to_channel_last(x)
+    result = to_channel_last(torch.zeros_like(expected))
+    workbench.invoke_test("layer_norm", x, result, state)
+    result = revert_channel_last(result)
 
     assert torch.allclose(result, expected, rtol=0.001, atol=0.02)
 
@@ -176,8 +193,11 @@ def test_mb_conv():
     expected = mb_conv(x)
 
     add_variance_epsilon(state)
-    result = torch.zeros_like(expected)
+    convert_to_channel_last(state)
+    x = to_channel_last(x)
+    result = to_channel_last(torch.zeros_like(expected))
     workbench.invoke_test("mb_conv", x, result, state)
+    result = revert_channel_last(result)
 
     # precision: ggml_gelu uses fp16 look-up table & tanh approximation
     assert torch.allclose(result, expected, rtol=0.001, atol=0.02)
@@ -225,8 +245,11 @@ def test_patch_merging():
     expected = patch_merging(x)
 
     add_variance_epsilon(state)
-    result = torch.zeros_like(expected).contiguous()
-    workbench.invoke_test("patch_merging", x, result, state)
+    convert_to_channel_last(state)
+    x = to_channel_last(x)
+    result = torch.zeros_like(expected).transpose(2, 1)
+    result = workbench.invoke_test("patch_merging", x, result, state)
+    result = result.transpose(1, 2).reshape_as(expected)
 
     # precision: ggml_gelu uses fp16 look-up table & tanh approximation
     assert torch.allclose(result, expected, rtol=0.001, atol=0.02)
@@ -373,7 +396,7 @@ def test_attention_rel_bias():
     state["attention_biases_indexed"] = state["attention_biases"][
         :, attention.attention_bias_idxs
     ]
-    result = torch.zeros_like(expected).contiguous()
+    result = torch.zeros_like(expected)
     workbench.invoke_test("attention_rel_bias", x, result, state)
 
     assert torch.allclose(result, expected, atol=0.001)
@@ -487,8 +510,9 @@ def test_tiny_vit_block():
         :, tiny_vit_block.attn.attention_bias_idxs
     ]
     add_variance_epsilon(state)
-    result = torch.zeros_like(expected).contiguous()
-    workbench.invoke_test("tiny_vit_block", x, result, state)
+    convert_to_channel_last(state)
+    result = torch.zeros_like(expected)
+    result = workbench.invoke_test("tiny_vit_block", x, result, state)
 
     assert torch.allclose(result, expected, rtol=0.001, atol=0.02)
 
@@ -977,6 +1001,26 @@ def test_prompt_encoder_points():
     workbench.invoke_test("no_mask_embed", points, result_dense, state)
 
     assert torch.allclose(result_dense, expected_dense)
+
+
+def test_prompt_encoder_box():
+    prompt_encoder = PromptEncoder(
+        embed_dim=4,
+        image_embedding_size=(8, 8),
+        input_image_size=(64, 64),
+        mask_in_chans=4,
+    )
+    state = workbench.randomize(prompt_encoder.state_dict())
+    prompt_encoder.load_state_dict(state)
+    prompt_encoder.eval()
+
+    boxes = torch.tensor([[[63.0, 55.0], [32.0, 0.0]]])
+    expected, _ = prompt_encoder(points=None, boxes=boxes, masks=None)
+
+    result = torch.zeros_like(expected).contiguous()
+    workbench.invoke_test("embed_box", boxes, result, state)
+
+    assert torch.allclose(result, expected)
 
 
 #

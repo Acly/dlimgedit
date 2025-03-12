@@ -43,8 +43,7 @@ struct Workbench {
 
     Workbench(int input_count, RawTensor* inputs_raw, RawTensor const& output_raw) {
         auto context_params = ggml_init_params{};
-        context_params.mem_size = 48 * output_raw.size_bytes() +
-                                  ggml_tensor_overhead() * (input_count + 1) +
+        context_params.mem_size = ggml_tensor_overhead() * (input_count + 1) +
                                   ggml_graph_overhead() + 2048 * ggml_tensor_overhead();
         context_params.no_alloc = true;
         model.model_context = model.graph_context = ggml_init(context_params);
@@ -59,6 +58,9 @@ struct Workbench {
             auto tensor = ggml_new_tensor_4d(model,GGML_TYPE_F32 ,raw.w,raw.h,raw.c,raw.n);
             ggml_set_name(tensor, raw.name);
         }
+        auto output = ggml_new_tensor_4d(model, GGML_TYPE_F32, output_raw.w, output_raw.h, output_raw.c, output_raw.n);
+        ggml_set_name(output, output_raw.name);
+        
         ggml_backend_alloc_ctx_tensors(model, backends[0]);
         for (auto&& raw : std::span(inputs_raw, input_count)) {
             auto tensor = ggml_get_tensor(model, raw.name);
@@ -75,7 +77,7 @@ struct Workbench {
     }
 
     void run() {
-        ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backends[0]));
+        ggml_backend_alloc_ctx_tensors(model, backends[0]);
         ggml_backend_buffer_type_t buffer_types[] = {
             ggml_backend_get_default_buffer_type(backends[0]),
             ggml_backend_get_default_buffer_type(backends[1]),
@@ -138,7 +140,7 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
         } else if (name == "mb_conv") {
             w.output(mb_conv(w.model, input), output);
         } else if (name == "patch_merging") {
-            w.output(patch_merging(w.model, input, 64), output);
+            w.output(patch_merging(w.model, input, 32), output);
         } else if (name == "mlp") {
             w.output(mlp(w.model, input), output);
         } else if (name == "attention_rel_bias") {
@@ -162,6 +164,12 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
                 input_data[i] = transform_coord(input_data[i], 1.0f, 64);
             }
             w.output(embed_points(w.model, input), output);
+        } else if (name == "embed_box") {
+            float* input_data = reinterpret_cast<float*>(input->data);
+            for (int i = 0; i < ggml_nelements(input); ++i) {
+                input_data[i] = transform_coord(input_data[i], 1.0f, 64);
+            }
+            w.output(embed_box(w.model, input), output);
         } else if (name == "no_mask_embed") {
             w.output(no_mask_embed(w.model, 8), output);
         } else if (name == "attention") {
@@ -195,8 +203,7 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             Tensor image_embeddings = input;
             Tensor sparse_prompt = w.model.weights("input_sparse_prompt");
             Tensor dense_prompt = w.model.weights("input_dense_prompt");
-            auto [masks, iou] = predict_masks(
-                w.model, image_embeddings, sparse_prompt, dense_prompt, 2);
+            auto [masks, iou] = predict_masks(w.model, image_embeddings, sparse_prompt, dense_prompt, 2);
             w.output(masks, output);
             w.output(iou, inputs[input_count - 1]);
         } else {

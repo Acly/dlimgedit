@@ -67,6 +67,7 @@ def invoke_test(
         ctypes.byref(raw_output),
     )
     assert result == 0, f"Test case {test_case} failed"
+    return output_tensor
 
 
 def randomize(state_dict: dict[str, torch.Tensor]):

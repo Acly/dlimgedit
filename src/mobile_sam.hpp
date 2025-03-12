@@ -7,7 +7,6 @@
 #include <tuple>
 #include <vector>
 
-
 namespace dlimg::sam {
 
 constexpr int image_size = 1024;
@@ -66,18 +65,15 @@ Tensor basic_layer(Model m, Tensor x, TinyViTParams::Layer const& p);
 
 // Prompt encoder
 
-struct EncodePromptResult {
-    Tensor sparse;
-    Tensor dense;
-};
+std::array<float, 4> preprocess_prompt(Point point, Extent input_image_extent);
+std::array<float, 4> preprocess_prompt(Region region, Extent input_image_extent);
 
-EncodePromptResult encode_prompt(Model m, Tensor point_coords);
+Tensor embed_points(Model m, Tensor coords);
+Tensor embed_box(Model m, Tensor coords);
+Tensor no_mask_embed(Model m, int embedding_size = 32);
 
 float transform_coord(int p, float scale, int image_size = 1024);
-std::array<float, 4> preprocess_prompt(Point point, Extent input_image_extent);
 Tensor position_embedding_random(Model m, Tensor coords);
-Tensor embed_points(Model m, Tensor coords);
-Tensor no_mask_embed(Model m, int embedding_size);
 
 // Mask decoder
 
