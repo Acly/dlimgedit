@@ -70,7 +70,7 @@ std::array<float, 4> preprocess_prompt(Region region, Extent input_image_extent)
 
 Tensor embed_points(Model m, Tensor coords);
 Tensor embed_box(Model m, Tensor coords);
-Tensor no_mask_embed(Model m, int embedding_size = 32);
+Tensor no_mask_embed(Model m, int embedding_size = 64);
 
 float transform_coord(int p, float scale, int image_size = 1024);
 Tensor position_embedding_random(Model m, Tensor coords);
@@ -83,7 +83,7 @@ struct MaskPrediction {
 };
 
 MaskPrediction predict_masks(Model m, Tensor image_embeddings, Tensor sparse_prompt,
-                             Tensor dense_prompt, int image_embed_size = 32);
+                             Tensor dense_prompt);
 
 Tensor mlp_block(Model m, Tensor x);
 Tensor separate_attention_heads(Model m, Tensor x, int num_heads);

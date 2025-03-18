@@ -23,7 +23,7 @@ Tensor conv_2d_nchw(Model m, Tensor x, int stride = 1, int pad = 0) {
 }
 
 Tensor depthwise_conv_2d_nchw(Model m, Tensor x, int stride = 1, int pad = 0) {
-    return ggml_depthwise_conv_2d(m, m.weights("weight"), x, stride, stride, pad, pad, GGML_NCHW);
+    return ggml_depthwise_conv_2d(m, m.weights("weight"), x, stride, stride, pad, pad);
 }
 
 
@@ -203,7 +203,7 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             Tensor image_embeddings = input;
             Tensor sparse_prompt = w.model.weights("input_sparse_prompt");
             Tensor dense_prompt = w.model.weights("input_dense_prompt");
-            auto [masks, iou] = predict_masks(w.model, image_embeddings, sparse_prompt, dense_prompt, 2);
+            auto [masks, iou] = predict_masks(w.model, image_embeddings, sparse_prompt, dense_prompt);
             w.output(masks, output);
             w.output(iou, inputs[input_count - 1]);
         } else {
