@@ -170,11 +170,19 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
             ggml_backend_get_default_buffer_type(backend_cpu),
         };
         auto sched = ggml_backend_sched_new(
-            backends, buffer_types, 2, ggml_graph_size(graph), false);
+            backends+1, buffer_types+1, 1, ggml_graph_size(graph), false);
 
         Timer timer(graph, sched);
         // ggml_backend_sched_set_eval_callback(sched, debug_printer, nullptr);
+
+        // int64_t timesum=0;
+
+        // for (int i = 0; i < 10; ++i) {
+        // auto t_inner = ggml_time_ms();
         ggml_backend_sched_graph_compute(sched, graph);
+        // timesum += ggml_time_ms() - t_inner;
+        // }
+        // fmt::print("Average time: {} ms\n", timesum / 10);
         timer.print();
 
         auto image_embeddings_out = ggml_graph_get_tensor(graph, "image_embeddings");
@@ -205,7 +213,7 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
     // }
 
     {
-        Tensor image_embeddings = ggml_new_tensor_4d(graph_ctx, GGML_TYPE_F32, 64, 64, 256, 1);
+        Tensor image_embeddings = ggml_new_tensor_4d(graph_ctx, GGML_TYPE_F32, 256, 64, 64, 1);
         ggml_set_name(image_embeddings, "image_embeddings");
         ggml_set_input(image_embeddings);
 
@@ -284,11 +292,138 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
                    .count());
 }
 
+struct ggml_tensor * ggml_conv_2d_dw_f32(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a,
+    struct ggml_tensor  * b,
+    int                   s0,
+    int                   s1,
+    int                   p0,
+    int                   p1,
+    int                   d0,
+    int                   d1) {
+struct ggml_tensor * new_a = ggml_reshape_4d(ctx, a, a->ne[0], a->ne[1], 1, a->ne[2] * a->ne[3]);
+struct ggml_tensor * im2col = ggml_im2col(ctx, new_a,
+                                    ggml_reshape_4d(ctx, b, b->ne[0], b->ne[1], 1, b->ne[2] * b->ne[3]),
+                                    s0, s1, p0, p1, d0, d1, true, GGML_TYPE_F32); // [N * IC, OH, OW, KH * KW]
+struct ggml_tensor * new_b = ggml_reshape_4d(ctx, im2col, im2col->ne[0], im2col->ne[2] * im2col->ne[1], b->ne[2], b->ne[3]); // [N * IC, OH, OW, KH * KW] => [N, IC, OH * OW, KH * KW]
+
+new_a = ggml_reshape_4d(ctx, new_a, (new_a->ne[0] * new_a->ne[1]), new_a->ne[2],  new_a->ne[3], 1);                       // [OC，1, KH, KW] => [1, OC, 1, KH * KW]
+struct ggml_tensor * result = ggml_mul_mat(ctx, new_a, new_b);
+result = ggml_reshape_4d(ctx, result, im2col->ne[1], im2col->ne[2], b->ne[2], b->ne[3]); // [N, OC, OH, OW]
+
+return result;
+}
+
+void test_depthwise_conv_2d(std::string_view method) {
+    ggml_time_init();
+    const int iter = 100;
+
+    int c = 256;
+    int w = 256;
+    int h = 256;
+    int n = 1;
+    int stride = 1;
+    int pad = 1;
+    int kw = 3;
+    int kh = 3;
+
+    std::vector<float> input_data(c * w * h * n);
+    std::vector<float> weight_data(c * kw * kh);
+    std::vector<float> output_data(c * w * h * n);
+
+    for (int i = 0; i < input_data.size(); ++i) {
+        input_data[i] = 2.f * float(i) / float(input_data.size()) - 1.f;
+    }
+    for (int i = 0; i < weight_data.size(); ++i) {
+        weight_data[i] = 2.f * float(i) / float(weight_data.size()) - 1.f;
+    }
+
+    ggml_init_params params{};
+    params.mem_size = 2 * ggml_tensor_overhead();
+    params.no_alloc = true;
+    ggml_context* ctx = ggml_init(params);
+
+    ggml_tensor* input = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, w, h, c, n);
+    ggml_tensor* weight = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, kw, kh, 1, c);
+    ggml_set_input(input);
+    ggml_set_input(weight);
+
+    ggml_backend_t backends[] = {ggml_backend_blas_init(), ggml_backend_cpu_init()};
+    ggml_backend_blas_set_n_threads(backends[0], 6);
+    ggml_backend_cpu_set_n_threads(backends[1], 6);
+    ggml_backend_buffer_t buffer1 = ggml_backend_alloc_ctx_tensors(ctx, backends[1]);
+    ggml_backend_buffer_t buffer0 = ggml_backend_alloc_ctx_tensors(ctx, backends[0]);
+
+    ggml_backend_tensor_set(input, input_data.data(), 0, input_data.size() * sizeof(float));
+    ggml_backend_tensor_set(weight, weight_data.data(), 0, weight_data.size() * sizeof(float));
+
+    ggml_init_params graph_params{};
+    graph_params.mem_size = GGML_DEFAULT_GRAPH_SIZE * ggml_tensor_overhead() + ggml_graph_overhead();
+    graph_params.no_alloc = true;
+    ggml_context* graph_ctx = ggml_init(graph_params);
+    ggml_cgraph* graph = ggml_new_graph(graph_ctx);
+
+    ggml_tensor* output = nullptr;
+    if (method == "nchw") {
+        output = ggml_depthwise_conv_2d(graph_ctx, weight, input, stride, stride, pad, pad);
+    } else if (method == "nhwc") {
+        weight = ggml_reshape_4d(graph_ctx, weight, c, 1, kw, kh);
+        weight = ggml_permute(graph_ctx, weight, 3, 2, 0, 1);
+        input = ggml_reshape_4d(graph_ctx, input, c, w, h, n);
+        input = ggml_permute(graph_ctx, input, 2, 0, 1, 3);
+        output = ggml_depthwise_conv_2d(graph_ctx, weight, input, stride, stride, pad, pad);
+        output = ggml_permute(graph_ctx, output, 1, 2, 0, 3);
+    } else if (method == "old") {
+        output = ggml_conv_2d_dw_f32(graph_ctx, weight, input, stride, stride, pad, pad, 1, 1);
+    } else {
+        fmt::print("Unknown method: {}\n", method);
+        return;
+    }
+    ggml_set_output(output);
+    ggml_build_forward_expand(graph, output);
+
+    ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backends[1]));
+    ggml_gallocr_alloc_graph(allocr, graph);
+
+    ggml_backend_buffer_type_t buffer_types[] ={
+         ggml_backend_get_default_buffer_type(backends[0]),
+         ggml_backend_get_default_buffer_type(backends[1])};
+    auto sched = ggml_backend_sched_new(backends+1, buffer_types+1, 1, ggml_graph_size(graph), false);
+
+    // warm-up
+    ggml_backend_sched_graph_compute(sched, graph);
+
+    auto timings = std::vector<int64_t>(iter);
+    for (int i = 0; i < iter; ++i) {     
+        auto time = ggml_time_us();
+        ggml_backend_sched_graph_compute(sched, graph);
+        timings[i] = ggml_time_us() - time;
+    }
+    // compute time mean and std
+    double mean = 0;
+    for (int i = 0; i < iter; ++i) {
+        mean += timings[i];
+    }
+    mean /= iter;
+    double std = 0;
+    for (int i = 0; i < iter; ++i) {
+        std += (timings[i] - mean) * (timings[i] - mean);
+    }
+    std = std::sqrt(std / iter);
+
+    fmt::print("Depthwise conv 2d: {} +/- {} ms\n", mean / 1000.0, std / 1000.0);
+
+    ggml_backend_tensor_get(output, output_data.data(), 0, ggml_nbytes(output));
+    
+}
+
 } // namespace dlimg
 
 int main(int argc, char** argv) {
     dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
                          dlimg::Region{dlimg::Point{180, 110}, dlimg::Extent{325, 220}},
                          "test/result/sam_ggml");
+    // dlimg::test_depthwise_conv_2d(argv[1]);
     return 0;
 }

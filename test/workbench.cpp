@@ -19,7 +19,7 @@
 namespace dlimg {
 
 Tensor conv_2d_nchw(Model m, Tensor x, int stride = 1, int pad = 0) {
-    return ggml_conv_2d_ext(m, m.weights("weight"), x, stride, stride, pad, pad, 1, 1, GGML_NCHW);
+    return ggml_conv_2d(m, m.weights("weight"), x, stride, stride, pad, pad, 1, 1);
 }
 
 Tensor depthwise_conv_2d_nchw(Model m, Tensor x, int stride = 1, int pad = 0) {
@@ -83,7 +83,7 @@ struct Workbench {
             ggml_backend_get_default_buffer_type(backends[1]),
         };
         auto sched = ggml_backend_sched_new(
-            backends.data(), buffer_types, 2, ggml_graph_size(model.graph), false);
+            backends.data()+1, buffer_types+1, 1, ggml_graph_size(model.graph), false);
 
         ggml_backend_sched_graph_compute(sched, model.graph);
 
@@ -123,7 +123,9 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             w.output(depthwise_conv_2d(w.model, input, 2, 1), output);
         } else if (name == "conv_2d") {
             w.output(conv_2d_nchw(w.model, input), output);
-        } else if (name == "conv_2d_channels") {            
+        } else if (name.starts_with("conv_2d_channels_stride2_pad1")) {
+            w.output(conv_2d(w.model, input, 2, 1), output);
+        } else if (name.starts_with("conv_2d_channels")) {
             w.output(conv_2d(w.model, input), output);
         } else if (name == "batch_norm_2d") {
             w.output(batch_norm_2d(w.model, input), output);

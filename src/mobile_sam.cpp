@@ -15,7 +15,10 @@ Tensor linear(Model m, Tensor x) {
 }
 
 Tensor conv_2d(Model m, Tensor x, int stride, int pad) {
-    x = ggml_conv_2d_ext(m, m.weights("weight"), x, stride, stride, pad, pad, 1, 1, GGML_NHWC);
+    Tensor weight = ggml_permute(m, m.weights("weight"), 2, 0, 1, 3);
+    x = ggml_permute(m, x, 2, 0, 1, 3);
+    x = ggml_conv_2d(m, weight, x, stride, stride, pad, pad, 1, 1);
+    x = ggml_permute(m, x, 1, 2, 0, 3);
     if (Tensor bias = m.find("bias")) {
         bias = ggml_reshape_4d(m, bias, bias->ne[0], 1, 1, 1);
         x = ggml_add_inplace(m, x, bias);

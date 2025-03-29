@@ -42,11 +42,14 @@ def build_dense_positional_embeddings(
     coords = 2 * np.pi * coords
     # outputs d_1 x ... x d_n x C shape
     pe = torch.cat([torch.sin(coords), torch.cos(coords)], dim=-1)
-    pe = pe.permute(2, 0, 1)
     return pe
 
 def conv_2d_kernel_to_nhwc(kernel: torch.Tensor):
-    return kernel.permute(2, 3, 1, 0) # H W C_in C_out
+    c_in = kernel.shape[1]
+    if c_in == 1: # depthwise
+        return kernel.permute(2, 3, 1, 0) # H W 1 C_out
+    else:
+        return kernel.permute(0, 2, 3, 1) # C_out H W C_in
 
 
 if len(sys.argv) < 3:

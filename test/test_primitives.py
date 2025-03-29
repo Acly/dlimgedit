@@ -34,41 +34,58 @@ def test_conv_2d(kernel_size: int, bias_mode: str):
 
     assert torch.allclose(result, expected)
 
+conv2d_cases = {
+    '1x1': dict(kernel_size=1, bias=False),
+    '1x1_bias': dict(kernel_size=1, bias=True),
+    '3x3': dict(kernel_size=3, bias=False),
+    '3x3_bias': dict(kernel_size=3, bias=True),
+    'stride2_pad1': dict(kernel_size=3, bias=False, stride=2, padding=1),
+    'stride2_pad1_5x5': dict(kernel_size=5, bias=False, stride=2, padding=1),
+}
+@pytest.mark.parametrize("scenario", conv2d_cases.keys())
+def test_conv_2d_channels(scenario: str):
+    s = conv2d_cases[scenario]
+    kernel_size = s['kernel_size']
+    has_bias = s.get('bias', False)
+    stride = s.get('stride', 1)
+    padding = s.get('padding', 0)
 
-@pytest.mark.parametrize("kernel_size", [1, 3])
-@pytest.mark.parametrize("bias_mode", ["with_bias", "without_bias"])
-def test_conv_2d_channels(kernel_size: int, bias_mode: str):
     x = torch.rand(1, 3, 4, 5)
     kernel = torch.rand(2, 3, kernel_size, kernel_size)
     bias = None
     args = dict(weight=kernel)
-    if bias_mode == "with_bias":
+    if has_bias:
         bias = torch.tensor([7, 21]).float()
         args["bias"] = bias
-    expected = torch.nn.functional.conv2d(x, kernel, bias=bias)
+    expected = torch.nn.functional.conv2d(x, kernel, bias=bias, stride=stride, padding=padding)
 
     x = to_channel_last(x)
-    args["weight"] = kernel.permute(2, 3, 1, 0)
+    args["weight"] = kernel.permute(0, 2, 3, 1)
 
     result = to_channel_last(torch.zeros_like(expected))
-    workbench.invoke_test("conv_2d_channels", x, result, args)
+    workbench.invoke_test(f"conv_2d_channels_{scenario}", x, result, args)
     result = revert_channel_last(result)
 
+    workbench.print_results(result, expected)
     assert torch.allclose(result, expected)
 
 
 @pytest.mark.parametrize("scenario", ["stride_1_pad_0", "stride_2_pad_1"])
 @pytest.mark.parametrize("memory_layout", ["nchw", "nhwc"])
-def test_conv_2d_depth_wise(scenario: str, memory_layout: str):
+@pytest.mark.parametrize("batch", ["single", "batch"])
+def test_depthwise_conv_2d(scenario: str, memory_layout: str, batch: str):
     stride, pad = {
         "stride_1_pad_0": (1, 0),
-        "stride_2_pad_1": (2, 1),
+        "stride_2_pad_1": (2, 1)
     }[scenario]
     x1 = torch.tensor([[1, 2, 2, 1], [4, 4, 4, 4], [0, 2, 2, 4], [1, 1, 1, 1]]).float()
     k = torch.tensor([[1, 0, 1], [0, 1, 0], [1, 0, 1]]).float()
 
     x = torch.stack((x1, x1 * 2.0, x1 * 0.5)).reshape(1, 3, 4, 4)
     k = k.repeat(3, 1, 1, 1)
+    if batch == "batch":
+        x = torch.cat((x, x * -1), dim=0)
+
     expected = torch.nn.functional.conv2d(x, k, stride=stride, padding=pad, groups=3)
 
     result = torch.zeros_like(expected)
@@ -80,6 +97,7 @@ def test_conv_2d_depth_wise(scenario: str, memory_layout: str):
     if memory_layout == "nhwc":
         result = revert_channel_last(result)
 
+    workbench.print_results(result, expected)
     assert torch.allclose(result, expected)
 
 
