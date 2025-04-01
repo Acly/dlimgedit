@@ -3,6 +3,7 @@
 #include <fmt/format.h>
 #include <ggml-blas.h>
 #include <ggml-cpu.h>
+#include <ggml-vulkan.h>
 #include <ggml.h>
 
 #include <cassert>
@@ -19,7 +20,12 @@
 namespace dlimg {
 
 Tensor conv_2d_nchw(Model m, Tensor x, int stride = 1, int pad = 0) {
-    return ggml_conv_2d(m, m.weights("weight"), x, stride, stride, pad, pad, 1, 1);
+    x = ggml_conv_2d(m, m.weights("weight"), x, stride, stride, pad, pad, 1, 1);
+    if (auto bias = m.find("bias")) {
+        bias = ggml_reshape_4d(m, bias, 1, 1, bias->ne[0], 1);
+        x = ggml_add_inplace(m, x, bias);
+    }
+    return x;
 }
 
 Tensor depthwise_conv_2d_nchw(Model m, Tensor x, int stride = 1, int pad = 0) {
@@ -41,17 +47,23 @@ struct RawTensor {
 
 struct Workbench {
 
-    Workbench(int input_count, RawTensor* inputs_raw, RawTensor const& output_raw) {
+    Workbench(int input_count, RawTensor* inputs_raw, RawTensor const& output_raw, GGMLBackend backend)
+        : backend(backend) {
+
         auto context_params = ggml_init_params{};
         context_params.mem_size = ggml_tensor_overhead() * (input_count + 1) +
                                   ggml_graph_overhead() + 2048 * ggml_tensor_overhead();
         context_params.no_alloc = true;
         model.model_context = model.graph_context = ggml_init(context_params);
         model.graph = ggml_new_graph(model);
-        backends[0] = ggml_backend_blas_init();
         backends[1] = ggml_backend_cpu_init();
         ggml_backend_cpu_set_n_threads(backends[1], 1);
 
+        if (backend == GGMLBackend::vulkan) {
+            backends[0] = ggml_backend_vk_init(0);
+        } else {
+            backends[0] = backends[1];
+        }
 
         for (int i = 0; i < input_count; ++i) {
             auto& raw = inputs_raw[i];
@@ -82,8 +94,9 @@ struct Workbench {
             ggml_backend_get_default_buffer_type(backends[0]),
             ggml_backend_get_default_buffer_type(backends[1]),
         };
+        int backend_count = backend == GGMLBackend::cpu ? 1 : 2;
         auto sched = ggml_backend_sched_new(
-            backends.data()+1, buffer_types+1, 1, ggml_graph_size(model.graph), false);
+            backends.data(), buffer_types, backend_count, ggml_graph_size(model.graph), false);
 
         ggml_backend_sched_graph_compute(sched, model.graph);
 
@@ -95,6 +108,7 @@ struct Workbench {
     Model model;
     std::vector<std::tuple<Tensor, RawTensor>> outputs;
     std::array<ggml_backend_t, 2> backends;
+    GGMLBackend backend;
 };
 
 } // namespace dlimg
@@ -104,13 +118,13 @@ extern "C" {
 #endif
 
 API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTensor* inputs,
-                            dlimg::RawTensor const& output) {
+                            dlimg::RawTensor const& output, int32_t backend) {
     using namespace dlimg;
     using namespace dlimg::sam;
 
     try {
         auto name = std::string_view(testcase);
-        auto w = dlimg::Workbench(input_count, inputs, output);
+        auto w = dlimg::Workbench(input_count, inputs, output, GGMLBackend(backend));
         Tensor input = w.model.weights("input");
 
         if (name == "conv_2d_depthwise_nchw_stride_1_pad_0") {

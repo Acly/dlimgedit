@@ -12,24 +12,29 @@ using TensorName = FixedString<GGML_MAX_NAME>;
 using Tensor = ggml_tensor*;
 using Shape4 = std::array<int64_t, 4>;
 
-Shape4 nelements(Tensor t) {
-    return {t->ne[0], t->ne[1], t->ne[2], t->ne[3]};
-}
+Shape4 nelements(Tensor t) { return {t->ne[0], t->ne[1], t->ne[2], t->ne[3]}; }
+
+enum class GGMLBackend { cpu = 1, vulkan = 2 };
+
+bool is_gpu(GGMLBackend backend) { return backend == GGMLBackend::vulkan; }
 
 struct Model {
     ggml_context* model_context = nullptr;
     ggml_context* graph_context = nullptr;
     ggml_cgraph* graph = nullptr;
     TensorName prefix;
+    GGMLBackend backend = GGMLBackend::cpu;
 
     Model() = default;
 
     explicit Model(ggml_context* model_context, ggml_context* graph_context = nullptr,
-                   ggml_cgraph* graph = nullptr, TensorName prefix = {})
+                   ggml_cgraph* graph = nullptr, TensorName prefix = {},
+                   GGMLBackend backend = GGMLBackend::cpu)
         : model_context(model_context),
           graph_context(graph_context ? graph_context : model_context),
           graph(graph),
-          prefix(prefix) {}
+          prefix(prefix),
+          backend(backend) {}
 
     Tensor find(char const* name) const {
         auto full_name = TensorName();
@@ -47,7 +52,7 @@ struct Model {
     }
 
     Model with_prefix(TensorName prefix) const {
-        return Model{model_context, graph_context, graph, prefix};
+        return Model{model_context, graph_context, graph, prefix, backend};
     }
 
     Model operator[](char const* sub_module) const {

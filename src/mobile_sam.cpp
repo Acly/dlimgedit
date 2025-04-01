@@ -17,11 +17,20 @@ Tensor linear(Model m, Tensor x) {
 Tensor conv_2d(Model m, Tensor x, int stride, int pad) {
     Tensor weight = ggml_permute(m, m.weights("weight"), 2, 0, 1, 3);
     x = ggml_permute(m, x, 2, 0, 1, 3);
+    if (is_gpu(m.backend)) {
+        weight = ggml_cont(m, weight);
+        if (!ggml_is_contiguous(x)) {
+            x = ggml_cont(m, x);
+        }
+    }
     x = ggml_conv_2d(m, weight, x, stride, stride, pad, pad, 1, 1);
     x = ggml_permute(m, x, 1, 2, 0, 3);
     if (Tensor bias = m.find("bias")) {
         bias = ggml_reshape_4d(m, bias, bias->ne[0], 1, 1, 1);
         x = ggml_add_inplace(m, x, bias);
+    }
+    if (is_gpu(m.backend)) {
+        x = ggml_cont(m, x);
     }
     return x;
 }
@@ -29,8 +38,19 @@ Tensor conv_2d(Model m, Tensor x, int stride, int pad) {
 Tensor depthwise_conv_2d(Model m, Tensor x, int stride, int pad) {
     Tensor weight = ggml_permute(m, m.weights("weight"), 3, 2, 0, 1);
     x = ggml_permute(m, x, 2, 0, 1, 3);
-    x = ggml_depthwise_conv_2d(m, weight, x, stride, stride, pad, pad);
+    if (is_gpu(m.backend)) {
+        weight = ggml_cont(m, weight);
+        if (!ggml_is_contiguous(x)) {
+            x = ggml_cont(m, x);
+        }
+        x = ggml_conv_2d_dw(m, weight, x, stride, stride, pad, pad, 1, 1);
+    } else {
+        x = ggml_depthwise_conv_2d(m, weight, x, stride, stride, pad, pad);
+    }
     x = ggml_permute(m, x, 1, 2, 0, 3);
+    if (is_gpu(m.backend)) {
+        x = ggml_cont(m, x);
+    }
     return x;
 }
 
@@ -46,8 +66,59 @@ Tensor batch_norm_2d(Model m, Tensor x) {
     Tensor mean = m.weights("running_mean");
     Tensor weight = m.weights("weight");
     Tensor bias = m.weights("bias");
-    x = ggml_batch_norm_2d_inplace(m, x, mean, var, weight, bias);
+    if (m.backend == GGMLBackend::cpu) {
+        x = ggml_batch_norm_2d_inplace(m, x, mean, var, weight, bias);
+    } else {
+        x = ggml_sub_inplace(m, x, mean);
+        x = ggml_div_inplace(m, x, var);
+        x = ggml_mul_inplace(m, x, weight);
+        x = ggml_add_inplace(m, x, bias);
+    }
     return m.named(x);
+}
+
+Tensor window_partition(Model m, Tensor x, int window) {
+    int64_t c = x->ne[0];
+    int64_t b = x->ne[3];
+    if (m.backend == GGMLBackend::cpu) {
+        x = ggml_win_part(m, x, window);
+        x = ggml_reshape_3d(m, x, c, window * window, x->ne[3]);
+        return x;
+    }
+    int64_t px = (window - x->ne[1] % window) % window;
+    int64_t py = (window - x->ne[2] % window) % window;
+    int64_t npw = (x->ne[1] + px) / window;
+    int64_t nph = (x->ne[2] + py) / window;
+
+    if (px > 0 || py > 0) {
+        x = ggml_pad(m, x, 0, px, py, 0);
+    }
+    x = ggml_reshape_4d(m, x, c * window, npw, window, nph * b);
+    x = ggml_cont(m, ggml_permute(m, x, 0, 2, 1, 3));
+    x = ggml_reshape_3d(m, x, c, window * window, npw * nph * b);
+    return x;
+}
+
+Tensor window_reverse(Model m, Tensor x, int w, int h, int window) {
+    int64_t c = x->ne[0];
+    int64_t b = x->ne[3];
+    if (m.backend == GGMLBackend::cpu) {
+        x = ggml_reshape_4d(m, x, c, window, window, x->ne[2]);
+        x = ggml_win_unpart(m, x, w, h, window);
+        return x;
+    }
+    int64_t px = (window - w % window) % window;
+    int64_t py = (window - h % window) % window;
+    int64_t npw = (w + px) / window;
+    int64_t nph = (h + py) / window;
+    int64_t nb0 = x->nb[0];
+
+    x = ggml_reshape_4d(m, x, c * window, window, npw, nph * b);
+    x = ggml_cont(m, ggml_permute(m, x, 0, 2, 1, 3));
+    x = ggml_view_4d(
+        m, x, c, w, h, b, nb0 * c, nb0 * c * (w + px), nb0 * c * (w + px) * (h + py), 0);
+    x = ggml_cont(m, x);
+    return x;
 }
 
 //
@@ -194,24 +265,16 @@ Tensor tiny_vit_block(Model m, Tensor x, int input_resolution, int dim, int num_
                       int window_size) {
     int h = input_resolution;
     int w = input_resolution;
-    int b = x->ne[2];
-    int spatial = x->ne[1];
-    int c = x->ne[0];
+    auto [c, spatial, b, _] = nelements(x);
     GGML_ASSERT(spatial == h * w);
     GGML_ASSERT(h != window_size && w != window_size);
 
     Tensor res_x = x;
     x = ggml_reshape_4d(m, x, c, w, h, b);
 
-    // window partition
-    x = ggml_win_part(m, x, window_size);
-    x = ggml_reshape_3d(m, x, c, window_size * window_size, x->ne[3]);
-
+    x = window_partition(m, x, window_size);
     x = attention_rel_bias(m["attn"], x, dim, num_heads);
-
-    // window reverse
-    x = ggml_reshape_4d(m, x, c, window_size, window_size, x->ne[2]);
-    x = ggml_win_unpart(m, x, w, h, window_size);
+    x = window_reverse(m, x, w, h, window_size);
 
     x = ggml_reshape_3d(m, x, c, spatial, b);
     x = ggml_add_inplace(m, x, res_x);
@@ -338,9 +401,7 @@ Tensor embed_box(Model m, Tensor coords) {
     return x;
 }
 
-Tensor no_mask_embed(Model m, int ) {
-    return m.weights("no_mask_embed.weight");
-}
+Tensor no_mask_embed(Model m, int) { return m.weights("no_mask_embed.weight"); }
 
 //
 // Mask Decoder

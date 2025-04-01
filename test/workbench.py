@@ -33,7 +33,10 @@ def to_raw_tensor(name: str, tensor: torch.Tensor):
     raw_tensor.n = tensor.size(0)
     return (raw_tensor, torch_tensor)
 
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE" # Some python lib (numpy? torch?) loads OpenMP
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = (
+    "TRUE"  # Some python lib (numpy? torch?) loads OpenMP
+)
 
 root_dir = Path(__file__).parent.parent
 lib = ctypes.CDLL(str(root_dir / "build" / "bin" / "dlimgedit_workbench.dll"))
@@ -42,6 +45,7 @@ lib.dlimg_workbench.argtypes = [
     ctypes.c_int32,
     ctypes.POINTER(RawTensor),
     ctypes.POINTER(RawTensor),
+    ctypes.c_int32,
 ]
 lib.dlimg_workbench.restype = ctypes.c_int32
 
@@ -51,6 +55,7 @@ def invoke_test(
     input: torch.Tensor,
     output: torch.Tensor,
     state: dict[str, torch.Tensor],
+    backend: str = "cpu",
     **kwargs: dict[str, torch.Tensor],
 ):
     state.update(kwargs)
@@ -65,6 +70,7 @@ def invoke_test(
         len(raw_inputs),
         (RawTensor * len(raw_inputs))(*raw_inputs),
         ctypes.byref(raw_output),
+        1 if backend == "cpu" else 2,
     )
     assert result == 0, f"Test case {test_case} failed"
     return output_tensor

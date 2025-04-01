@@ -66,7 +66,6 @@ def test_conv_2d_channels(scenario: str):
     workbench.invoke_test(f"conv_2d_channels_{scenario}", x, result, args)
     result = revert_channel_last(result)
 
-    workbench.print_results(result, expected)
     assert torch.allclose(result, expected)
 
 
@@ -97,7 +96,6 @@ def test_depthwise_conv_2d(scenario: str, memory_layout: str, batch: str):
     if memory_layout == "nhwc":
         result = revert_channel_last(result)
 
-    workbench.print_results(result, expected)
     assert torch.allclose(result, expected)
 
 
