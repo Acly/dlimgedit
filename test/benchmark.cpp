@@ -112,15 +112,14 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
     }
 
     ggml_backend_t backend_cpu = ggml_backend_cpu_init();
-    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(model_ctx, backend_cpu);
     ggml_backend_cpu_set_n_threads(backend_cpu, 6);
 
     ggml_backend_t backend_primary = backend_cpu;
     ggml_backend_buffer_t buffer_primary;
     if (backend == GGMLBackend::vulkan) {
         backend_primary = ggml_backend_vk_init(0);
-        buffer_primary = ggml_backend_alloc_ctx_tensors(model_ctx, backend_primary);
     }
+    buffer_primary = ggml_backend_alloc_ctx_tensors(model_ctx, backend_primary);
 
     for (ggml_tensor* t = ggml_get_first_tensor(model_ctx); t != nullptr;
          t = ggml_get_next_tensor(model_ctx, t)) {
@@ -146,6 +145,7 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
     ggml_cgraph* graph = ggml_new_graph(graph_ctx);
 
     Model model{model_ctx, graph_ctx, graph};
+    model.backend = backend;
 
     std::vector<float> image_embeddings_data;
 
@@ -153,11 +153,13 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
         ggml_tensor* x = ggml_new_tensor_4d(graph_ctx, GGML_TYPE_F32, 3, 1024, 1024, 1);
         ggml_set_name(x, "input");
 
-        Tensor image_embeddings = ggml_cont(
-            model, sam::tiny_vit(model["enc"], x, sam::TinyViTParams{}));
+        Tensor image_embeddings = sam::tiny_vit(model["enc"], x, sam::TinyViTParams{});
         ggml_set_name(image_embeddings, "image_embeddings");
         ggml_build_forward_expand(graph, image_embeddings);
     }
+    auto time_preprocess = std::chrono::steady_clock::now();
+    auto time_first_run = std::chrono::steady_clock::time_point{};
+    auto time_second_run = std::chrono::steady_clock::time_point{};
     {
         ggml_gallocr_t allocr =
             ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend_primary));
@@ -174,22 +176,29 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
             ggml_backend_get_default_buffer_type(backend_primary),
             ggml_backend_get_default_buffer_type(backend_cpu),
         };
-        int backend_count = backend == GGMLBackend::vulkan ? 2 : 1;
-        auto sched = ggml_backend_sched_new(
-            backends, buffer_types, backend_count, ggml_graph_size(graph), false);
+        // int backend_count = backend == GGMLBackend::vulkan ? 2 : 1;
+        // auto sched = ggml_backend_sched_new(
+        //     backends, buffer_types, backend_count, ggml_graph_size(graph), false);
 
-        Timer timer(graph, sched);
+        // Timer timer(graph, sched);
         // ggml_backend_sched_set_eval_callback(sched, debug_printer, nullptr);
 
         // int64_t timesum=0;
 
         // for (int i = 0; i < 10; ++i) {
         // auto t_inner = ggml_time_ms();
-        ggml_backend_sched_graph_compute(sched, graph);
+        ggml_backend_graph_compute(backend_primary, graph);
+        // ggml_backend_sched_graph_compute(sched, graph);
         // timesum += ggml_time_ms() - t_inner;
         // }
         // fmt::print("Average time: {} ms\n", timesum / 10);
-        timer.print();
+        // timer.print();
+
+        time_first_run = std::chrono::steady_clock::now();
+
+        // ggml_backend_graph_compute(backend_primary, graph);
+
+        time_second_run = std::chrono::steady_clock::now();
 
         auto image_embeddings_out = ggml_graph_get_tensor(graph, "image_embeddings");
         image_embeddings_data.resize(ggml_nelements(image_embeddings_out));
@@ -201,7 +210,22 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
         ggml_free(graph_ctx);
     }
 
+    // auto delta_first_run =
+    //     std::chrono::duration_cast<std::chrono::milliseconds>(time_first_run - time_preprocess);
+    // fmt::print("First run:        {}ms\n", delta_first_run.count());
+
+    // auto delta_second_run =
+    //     std::chrono::duration_cast<std::chrono::milliseconds>(time_second_run - time_first_run);
+    // fmt::print("Second run:       {}ms\n", delta_second_run.count());
+
     auto time_image_embed = std::chrono::steady_clock::now();
+    // auto delta = std::chrono::duration_cast<std::chrono::milliseconds>(time_image_embed -
+    // time_preprocess); fmt::print("Image embeddings: {}ms\n", delta.count());
+
+    // auto delta_total =
+    //     std::chrono::duration_cast<std::chrono::milliseconds>(time_image_embed - time);
+    // fmt::print("Total time:       {}ms\n", delta_total.count());
+    // exit(0);
 
     graph_ctx = ggml_init(graph_ctx_params);
     graph = ggml_new_graph(graph_ctx);
@@ -242,7 +266,8 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
         ggml_build_forward_expand(graph, iou);
     }
     {
-        ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend_cpu));
+        ggml_gallocr_t allocr =
+            ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend_primary));
         if (!ggml_gallocr_alloc_graph(allocr, graph)) {
             throw std::runtime_error("Failed to allocate graph");
         }
@@ -255,7 +280,7 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
         ggml_tensor* point_coords = ggml_graph_get_tensor(graph, "point_coords");
         ggml_backend_tensor_set(point_coords, points.data(), 0, ggml_nbytes(point_coords));
 
-        ggml_backend_graph_compute(backend_cpu, graph);
+        ggml_backend_graph_compute(backend_primary, graph);
     }
 
     auto output_iou = ggml_graph_get_tensor(graph, "iou");
@@ -265,15 +290,6 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
     auto output_mask = ggml_graph_get_tensor(graph, "masks");
     std::vector<float> mask_data(4 * n * n);
     ggml_backend_tensor_get(output_mask, mask_data.data(), 0, ggml_nbytes(output_mask));
-
-    // { // load low res masks from file
-    //     auto fd = fopen("_low_res_masks.raw", "rb");
-    //     if (!fd) {
-    //         throw std::runtime_error("Failed to open _low_res_masks.raw");
-    //     }
-    //     fread(mask_data.data(), sizeof(float), mask_data.size(), fd);
-    //     fclose(fd);
-    // }
 
     auto time_mask_decode = std::chrono::steady_clock::now();
 
@@ -320,12 +336,12 @@ struct ggml_tensor* ggml_conv_2d_dw_f32(struct ggml_context* ctx, struct ggml_te
 
 void test_depthwise_conv_2d(std::string_view method) {
     ggml_time_init();
-    const int iter = 100;
+    const int iter = 20;
 
     int c = 256;
-    int w = 256;
-    int h = 256;
-    int n = 1;
+    int w = 512;
+    int h = 512;
+    int n = 2;
     int stride = 1;
     int pad = 1;
     int kw = 3;
@@ -352,8 +368,7 @@ void test_depthwise_conv_2d(std::string_view method) {
     ggml_set_input(input);
     ggml_set_input(weight);
 
-    ggml_backend_t backends[] = {ggml_backend_blas_init(), ggml_backend_cpu_init()};
-    ggml_backend_blas_set_n_threads(backends[0], 6);
+    ggml_backend_t backends[] = {ggml_backend_vk_init(0), ggml_backend_cpu_init()};
     ggml_backend_cpu_set_n_threads(backends[1], 6);
     ggml_backend_buffer_t buffer1 = ggml_backend_alloc_ctx_tensors(ctx, backends[1]);
     ggml_backend_buffer_t buffer0 = ggml_backend_alloc_ctx_tensors(ctx, backends[0]);
@@ -387,13 +402,12 @@ void test_depthwise_conv_2d(std::string_view method) {
     ggml_set_output(output);
     ggml_build_forward_expand(graph, output);
 
-    ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backends[1]));
+    ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backends[0]));
     ggml_gallocr_alloc_graph(allocr, graph);
 
     ggml_backend_buffer_type_t buffer_types[] = {ggml_backend_get_default_buffer_type(backends[0]),
                                                  ggml_backend_get_default_buffer_type(backends[1])};
-    auto sched = ggml_backend_sched_new(
-        backends + 1, buffer_types + 1, 1, ggml_graph_size(graph), false);
+    auto sched = ggml_backend_sched_new(backends, buffer_types, 2, ggml_graph_size(graph), false);
 
     // warm-up
     ggml_backend_sched_graph_compute(sched, graph);
@@ -421,12 +435,132 @@ void test_depthwise_conv_2d(std::string_view method) {
     ggml_backend_tensor_get(output, output_data.data(), 0, ggml_nbytes(output));
 }
 
+void test_conv_2d(std::string_view method) {
+    ggml_time_init();
+    const int iter = 20;
+
+    int ci = 128;
+    int co = 160;
+    int w = 256;
+    int h = 256;
+    int n = 1;
+    int stride = 1;
+    int pad = 1;
+    int kw = 3;
+    int kh = 3;
+
+    std::vector<float> input_data(ci * w * h * n);
+    std::vector<float> weight_data(ci * co * kw * kh);
+    std::vector<float> output_data(co * w * h * n);
+
+    for (int i = 0; i < input_data.size(); ++i) {
+        input_data[i] = 2.f * float(i) / float(input_data.size()) - 1.f;
+    }
+    for (int i = 0; i < weight_data.size(); ++i) {
+        weight_data[i] = 2.f * float(i) / float(weight_data.size()) - 1.f;
+    }
+
+    ggml_init_params params{};
+    params.mem_size = 2 * ggml_tensor_overhead();
+    params.no_alloc = true;
+    ggml_context* ctx = ggml_init(params);
+
+    ggml_tensor* input = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, w, h, ci, n);
+    ggml_tensor* weight = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, kw, kh, ci, co);
+    ggml_set_input(input);
+    ggml_set_input(weight);
+
+    ggml_backend_t backends[] = {ggml_backend_vk_init(0), ggml_backend_cpu_init()};
+    ggml_backend_cpu_set_n_threads(backends[1], 6);
+    ggml_backend_buffer_t buffer1 = ggml_backend_alloc_ctx_tensors(ctx, backends[1]);
+    ggml_backend_buffer_t buffer0 = ggml_backend_alloc_ctx_tensors(ctx, backends[0]);
+
+    ggml_backend_tensor_set(input, input_data.data(), 0, input_data.size() * sizeof(float));
+    ggml_backend_tensor_set(weight, weight_data.data(), 0, weight_data.size() * sizeof(float));
+
+    ggml_init_params graph_params{};
+    graph_params.mem_size = GGML_DEFAULT_GRAPH_SIZE * ggml_tensor_overhead() +
+                            ggml_graph_overhead();
+    graph_params.no_alloc = true;
+    ggml_context* graph_ctx = ggml_init(graph_params);
+    ggml_cgraph* graph = ggml_new_graph(graph_ctx);
+
+    ggml_tensor* output = nullptr;
+    if (method == "nchw") {
+        output = ggml_conv_2d(graph_ctx, weight, input, stride, stride, pad, pad, 1, 1);
+    } else if (method == "nhwc") {
+        weight = ggml_reshape_4d(graph_ctx, weight, ci, kw, kh, co);
+        Tensor permuted_weight = ggml_permute(graph_ctx, weight, 2, 0, 1, 3);
+        input = ggml_reshape_4d(graph_ctx, input, ci, w, h, n);
+        input = ggml_permute(graph_ctx, input, 2, 0, 1, 3);
+        {
+            Tensor cols = ggml_im2col(graph_ctx, permuted_weight, input, stride, stride, pad, pad,
+                                      1, 1, true, GGML_TYPE_F32);
+            Tensor a = ggml_reshape_2d(
+                graph_ctx, cols, cols->ne[0], cols->ne[1] * cols->ne[2] * cols->ne[3]);
+            Tensor b = ggml_reshape_2d(
+                graph_ctx, weight, weight->ne[0] * weight->ne[1] * weight->ne[2], weight->ne[3]);
+            input = ggml_mul_mat(graph_ctx, b, a);
+            input = ggml_reshape_4d(
+                graph_ctx, input, weight->ne[3], cols->ne[1], cols->ne[2], cols->ne[3]);
+        }
+        output = ggml_permute(graph_ctx, input, 1, 2, 0, 3);
+    } else {
+        fmt::print("Unknown method: {}\n", method);
+        return;
+    }
+    ggml_set_output(output);
+    ggml_build_forward_expand(graph, output);
+
+    ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backends[0]));
+    ggml_gallocr_alloc_graph(allocr, graph);
+
+    ggml_backend_buffer_type_t buffer_types[] = {ggml_backend_get_default_buffer_type(backends[0]),
+                                                 ggml_backend_get_default_buffer_type(backends[1])};
+    auto sched = ggml_backend_sched_new(backends, buffer_types, 2, ggml_graph_size(graph), false);
+
+    // warm-up
+    ggml_backend_sched_graph_compute(sched, graph);
+
+    auto timings = std::vector<int64_t>(iter);
+    for (int i = 0; i < iter; ++i) {
+        auto time = ggml_time_us();
+        ggml_backend_sched_graph_compute(sched, graph);
+        timings[i] = ggml_time_us() - time;
+    }
+    // compute time mean and std
+    double mean = 0;
+    for (int i = 0; i < iter; ++i) {
+        mean += timings[i];
+    }
+    mean /= iter;
+    double std = 0;
+    for (int i = 0; i < iter; ++i) {
+        std += (timings[i] - mean) * (timings[i] - mean);
+    }
+    std = std::sqrt(std / iter);
+
+    fmt::print("Conv 2d: {} +/- {} ms\n", mean / 1000.0, std / 1000.0);
+
+    ggml_backend_tensor_get(output, output_data.data(), 0, ggml_nbytes(output));
+}
+
 } // namespace dlimg
 
 int main(int argc, char** argv) {
-    dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
-                         dlimg::Region{dlimg::Point{180, 110}, dlimg::Extent{325, 220}},
-                         "test/result/sam_ggml", dlimg::GGMLBackend::cpu);
-    // dlimg::test_depthwise_conv_2d(argv[1]);
+    auto arg1 = argc > 1 ? std::string_view(argv[1]) : std::string_view{};
+    if (arg1 == "depthwise_conv_2d") {
+        dlimg::test_depthwise_conv_2d(argv[2]);
+    } else if (arg1 == "conv_2d") {
+        dlimg::test_conv_2d(argv[2]);
+    } else if (arg1 == "vulkan") {
+        dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
+                             dlimg::Region{dlimg::Point{180, 110}, dlimg::Extent{325, 220}},
+                             "test/result/sam_ggml", dlimg::GGMLBackend::vulkan);
+    } else {
+        dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
+                             dlimg::Region{dlimg::Point{180, 110}, dlimg::Extent{325, 220}},
+                             "test/result/sam_ggml", dlimg::GGMLBackend::cpu);
+    }
     return 0;
 }

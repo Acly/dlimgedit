@@ -141,6 +141,10 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             w.output(conv_2d(w.model, input, 2, 1), output);
         } else if (name.starts_with("conv_2d_channels")) {
             w.output(conv_2d(w.model, input), output);
+        } else if (name.starts_with("conv_transpose_2d_stride2")) {
+            w.output(conv_transpose_2d(w.model, input, 2), output);
+        } else if (name.starts_with("conv_transpose_2d")) {
+            w.output(conv_transpose_2d(w.model, input, 1), output);
         } else if (name == "batch_norm_2d") {
             w.output(batch_norm_2d(w.model, input), output);
         } else if (name == "layer_norm") {

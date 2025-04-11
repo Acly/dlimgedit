@@ -15,22 +15,34 @@ Tensor linear(Model m, Tensor x) {
 }
 
 Tensor conv_2d(Model m, Tensor x, int stride, int pad) {
-    Tensor weight = ggml_permute(m, m.weights("weight"), 2, 0, 1, 3);
-    x = ggml_permute(m, x, 2, 0, 1, 3);
-    if (is_gpu(m.backend)) {
-        weight = ggml_cont(m, weight);
-        if (!ggml_is_contiguous(x)) {
-            x = ggml_cont(m, x);
-        }
+    Tensor weight = m.weights("weight");
+    if (weight->ne[1] == 1 && weight->ne[2] == 1 && stride == 1) {
+        int64_t w = x->ne[1];
+        int64_t h = x->ne[2];
+        int64_t b = x->ne[3];
+        weight = ggml_reshape_2d(m, weight, weight->ne[0], weight->ne[3]);
+        x = ggml_reshape_2d(m, x, x->ne[0], w * h * b);
+        x = ggml_mul_mat(m, weight, x);
+        x = ggml_reshape_4d(m, x, weight->ne[1], w, h, b);
+    } else if (is_gpu(m.backend)) {
+        x = ggml_permute(m, x, 2, 0, 1, 3);
+        Tensor permuted_weight = ggml_permute(m, weight, 2, 0, 1, 3);
+        Tensor cols = ggml_im2col(
+            m, permuted_weight, x, stride, stride, pad, pad, 1, 1, true, GGML_TYPE_F32);
+        Tensor a = ggml_reshape_2d(m, cols, cols->ne[0], cols->ne[1] * cols->ne[2] * cols->ne[3]);
+        Tensor b = ggml_reshape_2d(
+            m, weight, weight->ne[0] * weight->ne[1] * weight->ne[2], weight->ne[3]);
+        x = ggml_mul_mat(m, b, a);
+        x = ggml_reshape_4d(m, x, weight->ne[3], cols->ne[1], cols->ne[2], cols->ne[3]);
+    } else {
+        weight = ggml_permute(m, weight, 2, 0, 1, 3);
+        x = ggml_permute(m, x, 2, 0, 1, 3);
+        x = ggml_conv_2d(m, weight, x, stride, stride, pad, pad, 1, 1);
+        x = ggml_permute(m, x, 1, 2, 0, 3);
     }
-    x = ggml_conv_2d(m, weight, x, stride, stride, pad, pad, 1, 1);
-    x = ggml_permute(m, x, 1, 2, 0, 3);
     if (Tensor bias = m.find("bias")) {
         bias = ggml_reshape_4d(m, bias, bias->ne[0], 1, 1, 1);
         x = ggml_add_inplace(m, x, bias);
-    }
-    if (is_gpu(m.backend)) {
-        x = ggml_cont(m, x);
     }
     return x;
 }
@@ -38,18 +50,28 @@ Tensor conv_2d(Model m, Tensor x, int stride, int pad) {
 Tensor depthwise_conv_2d(Model m, Tensor x, int stride, int pad) {
     Tensor weight = ggml_permute(m, m.weights("weight"), 3, 2, 0, 1);
     x = ggml_permute(m, x, 2, 0, 1, 3);
-    if (is_gpu(m.backend)) {
-        weight = ggml_cont(m, weight);
-        if (!ggml_is_contiguous(x)) {
-            x = ggml_cont(m, x);
-        }
-        x = ggml_conv_2d_dw(m, weight, x, stride, stride, pad, pad, 1, 1);
-    } else {
-        x = ggml_depthwise_conv_2d(m, weight, x, stride, stride, pad, pad);
-    }
+    x = ggml_depthwise_conv_2d(m, weight, x, stride, stride, pad, pad);
     x = ggml_permute(m, x, 1, 2, 0, 3);
-    if (is_gpu(m.backend)) {
-        x = ggml_cont(m, x);
+    return x;
+}
+
+Tensor conv_transpose_2d(Model m, Tensor x, int stride) {
+    Tensor weight = m.weights("weight");
+    if (m.backend == GGMLBackend::cpu) {
+        // TODO: ggml_conv_transpose_2d_p0 expects fp16 weights
+        weight = ggml_cast(m, weight, GGML_TYPE_F16);
+        x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3));
+        x = ggml_conv_transpose_2d_p0(m, weight, x, stride);
+        x = ggml_cont(m, ggml_permute(m, x, 1, 2, 0, 3));
+    } else {
+        weight = ggml_cont(m, ggml_permute(m, weight, 1, 2, 3, 0));
+        weight = ggml_permute(m, weight, 3, 0, 1, 2);
+        x = ggml_permute(m, x, 2, 0, 1, 3);
+        x = ggml_conv_transpose_2d_p0(m, weight, x, stride);
+        x = ggml_reshape_4d(m, x, x->ne[2], x->ne[0], x->ne[1], x->ne[3]);
+    }
+    if (Tensor bias = m.find("bias")) {
+        x = ggml_add_inplace(m, x, bias);
     }
     return x;
 }
@@ -506,39 +528,20 @@ auto two_way_transformer(Model m, Tensor image_embedding, Tensor image_pe, Tenso
     return {queries, keys};
 }
 
-Tensor conv_transpose_2d(Model m, Tensor x, int stride) {
-    // TODO: ggml_conv_transpose_2d_p0 expects fp16 weights
-    Tensor weight = ggml_cast(m, m.weights("weight"), GGML_TYPE_F16);
-    Tensor bias = m.weights("bias");
-    bias = ggml_reshape_3d(m, bias, 1, 1, bias->ne[0]);
-    x = ggml_conv_transpose_2d_p0(m, weight, x, stride);
-    x = ggml_add_inplace(m, x, bias);
-    return x;
-}
-
 Tensor layer_norm_2d(Model m, Tensor x, float eps) {
-    Tensor weight = m.weights("weight");
-    weight = ggml_reshape_3d(m, weight, 1, 1, weight->ne[0]);
-    Tensor bias = m.weights("bias");
-    bias = ggml_reshape_3d(m, bias, 1, 1, bias->ne[0]);
-
-    x = ggml_cont(m, ggml_permute(m, x, 1, 2, 0, 3));
     x = ggml_norm(m, x, eps);
-    x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3));
-    x = ggml_mul_inplace(m, x, weight);
-    x = ggml_add_inplace(m, x, bias);
+    x = ggml_mul_inplace(m, x, m.weights("weight"));
+    x = ggml_add_inplace(m, x, m.weights("bias"));
     ggml_set_name(x, "layer_norm_2d");
     return x;
 }
 
 Tensor upscale_outputs(Model m, Tensor x) {
-    x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3));
     x = conv_transpose_2d(m[0], x, 2);
     x = layer_norm_2d(m[1], x);
     x = ggml_gelu_inplace(m, x);
     x = conv_transpose_2d(m[3], x, 2);
     x = ggml_gelu_inplace(m, x);
-    x = ggml_cont(m, ggml_permute(m, x, 1, 2, 0, 3));
     return x;
 }
 

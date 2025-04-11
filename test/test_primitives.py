@@ -54,8 +54,12 @@ def test_conv_2d_channels(scenario: str, backend: str):
     stride = s.get("stride", 1)
     padding = s.get("padding", 0)
 
-    x = torch.arange(3*6*4).float().reshape(1, 6, 4, 3).permute(0, 3, 1, 2)
-    kernel = torch.arange(2*3*kernel_size*kernel_size).reshape(2,3,kernel_size,kernel_size).float()#.rand(2, 3, kernel_size, kernel_size)
+    x = torch.arange(3 * 6 * 4).float().reshape(1, 6, 4, 3).permute(0, 3, 1, 2)
+    kernel = (
+        torch.arange(2 * 3 * kernel_size * kernel_size)
+        .reshape(2, 3, kernel_size, kernel_size)
+        .float()
+    )  # .rand(2, 3, kernel_size, kernel_size)
     bias = None
     args = dict(weight=kernel)
     if has_bias:
@@ -106,6 +110,31 @@ def test_depthwise_conv_2d(scenario: str, memory_layout: str, batch: str, backen
     if memory_layout == "nhwc":
         result = revert_channel_last(result)
 
+    assert torch.allclose(result, expected)
+
+
+@pytest.mark.parametrize("scenario", ["3x3", "5x5", "stride2"])
+def test_conv_transpose_2d(scenario:str):
+    ksize, stride = {
+        "3x3": (3, 1),
+        "5x5": (5, 1),
+        "stride2": (3, 2),
+    }[scenario]
+    x = torch.arange(3 * 4 * 5).reshape(1, 3, 4, 5).float()
+    weight = torch.arange(3 * 2 * ksize * ksize).reshape(3, 2, ksize, ksize).float()
+    bias = None
+    expected = torch.nn.functional.conv_transpose2d(x, weight, bias, stride=stride)
+
+    x = to_channel_last(x)  # -> [N, H, W, C_in]
+    weight = weight.permute(1, 2, 3, 0).contiguous()  # -> [C_out, H, W, C_in]
+    result = to_channel_last(torch.zeros_like(expected))
+
+    workbench.invoke_test(
+        f"conv_transpose_2d_{scenario}", x, result, dict(weight=weight), backend="vulkan"
+    )
+    result = revert_channel_last(result)
+
+    # workbench.print_results(result, expected)
     assert torch.allclose(result, expected)
 
 
