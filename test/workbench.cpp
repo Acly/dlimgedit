@@ -32,7 +32,6 @@ Tensor depthwise_conv_2d_nchw(Model m, Tensor x, int stride = 1, int pad = 0) {
     return ggml_depthwise_conv_2d(m, m.weights("weight"), x, stride, stride, pad, pad);
 }
 
-
 struct RawTensor {
     char const* name;
     float* data;
@@ -47,8 +46,8 @@ struct RawTensor {
 
 struct Workbench {
 
-    Workbench(int input_count, RawTensor* inputs_raw, RawTensor const& output_raw, GGMLBackend backend)
-        : backend(backend) {
+    Workbench(int input_count, RawTensor* inputs_raw, RawTensor const& output_raw,
+              GGMLBackend backend) {
 
         auto context_params = ggml_init_params{};
         context_params.mem_size = ggml_tensor_overhead() * (input_count + 1) +
@@ -56,6 +55,7 @@ struct Workbench {
         context_params.no_alloc = true;
         model.model_context = model.graph_context = ggml_init(context_params);
         model.graph = ggml_new_graph(model);
+        model.backend = backend;
         backends[1] = ggml_backend_cpu_init();
         ggml_backend_cpu_set_n_threads(backends[1], 1);
 
@@ -67,12 +67,13 @@ struct Workbench {
 
         for (int i = 0; i < input_count; ++i) {
             auto& raw = inputs_raw[i];
-            auto tensor = ggml_new_tensor_4d(model,GGML_TYPE_F32 ,raw.w,raw.h,raw.c,raw.n);
+            auto tensor = ggml_new_tensor_4d(model, GGML_TYPE_F32, raw.w, raw.h, raw.c, raw.n);
             ggml_set_name(tensor, raw.name);
         }
-        auto output = ggml_new_tensor_4d(model, GGML_TYPE_F32, output_raw.w, output_raw.h, output_raw.c, output_raw.n);
+        auto output = ggml_new_tensor_4d(
+            model, GGML_TYPE_F32, output_raw.w, output_raw.h, output_raw.c, output_raw.n);
         ggml_set_name(output, output_raw.name);
-        
+
         ggml_backend_alloc_ctx_tensors(model, backends[0]);
         for (auto&& raw : std::span(inputs_raw, input_count)) {
             auto tensor = ggml_get_tensor(model, raw.name);
@@ -94,21 +95,20 @@ struct Workbench {
             ggml_backend_get_default_buffer_type(backends[0]),
             ggml_backend_get_default_buffer_type(backends[1]),
         };
-        int backend_count = backend == GGMLBackend::cpu ? 1 : 2;
+        int backend_count = model.backend == GGMLBackend::cpu ? 1 : 2;
         auto sched = ggml_backend_sched_new(
             backends.data(), buffer_types, backend_count, ggml_graph_size(model.graph), false);
 
         ggml_backend_sched_graph_compute(sched, model.graph);
 
         for (auto& [output, output_raw] : outputs) {
-            memcpy(output_raw.data, ggml_get_data_f32(output), ggml_nbytes(output));
+            ggml_backend_tensor_get(output, output_raw.data, 0, ggml_nbytes(output));
         }
     }
 
     Model model;
     std::vector<std::tuple<Tensor, RawTensor>> outputs;
     std::array<ggml_backend_t, 2> backends;
-    GGMLBackend backend;
 };
 
 } // namespace dlimg
@@ -219,7 +219,8 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             Tensor image_embeddings = input;
             Tensor sparse_prompt = w.model.weights("input_sparse_prompt");
             Tensor dense_prompt = w.model.weights("input_dense_prompt");
-            auto [masks, iou] = predict_masks(w.model, image_embeddings, sparse_prompt, dense_prompt);
+            auto [masks, iou] = predict_masks(
+                w.model, image_embeddings, sparse_prompt, dense_prompt);
             w.output(masks, output);
             w.output(iou, inputs[input_count - 1]);
         } else {
