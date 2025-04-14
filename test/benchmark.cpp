@@ -545,6 +545,102 @@ void test_conv_2d(std::string_view method) {
     ggml_backend_tensor_get(output, output_data.data(), 0, ggml_nbytes(output));
 }
 
+void test_conv_transpose_2d(std::string_view method) {
+    ggml_time_init();
+    const int iter = 20;
+
+    int ci = 128;
+    int co = 160;
+    int w = 256;
+    int h = 256;
+    int n = 1;
+    int stride = 2;
+    int kw = 3;
+    int kh = 3;
+    int wo = (w - 1) * stride + kw;
+    int ho = (h - 1) * stride + kh;
+
+    std::vector<float> input_data(ci * w * h * n);
+    std::vector<float> weight_data(ci * co * kw * kh);
+    std::vector<float> output_data(co * wo * ho * n);
+
+    for (int i = 0; i < input_data.size(); ++i) {
+        input_data[i] = 2.f * float(i) / float(input_data.size()) - 1.f;
+    }
+    for (int i = 0; i < weight_data.size(); ++i) {
+        weight_data[i] = 2.f * float(i) / float(weight_data.size()) - 1.f;
+    }
+
+    ggml_init_params params{};
+    params.mem_size = 2 * ggml_tensor_overhead();
+    params.no_alloc = true;
+    ggml_context* ctx = ggml_init(params);
+
+    ggml_tensor* input = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, w, h, ci, n);
+    ggml_tensor* weight = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, kw, kh, co, ci);
+    ggml_set_input(input);
+    ggml_set_input(weight);
+
+    ggml_backend_t backend = ggml_backend_vk_init(0);
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+
+    ggml_backend_tensor_set(input, input_data.data(), 0, input_data.size() * sizeof(float));
+    ggml_backend_tensor_set(weight, weight_data.data(), 0, weight_data.size() * sizeof(float));
+
+    ggml_init_params graph_params{};
+    graph_params.mem_size = GGML_DEFAULT_GRAPH_SIZE * ggml_tensor_overhead() +
+                            ggml_graph_overhead();
+    graph_params.no_alloc = true;
+    ggml_context* graph_ctx = ggml_init(graph_params);
+    ggml_cgraph* graph = ggml_new_graph(graph_ctx);
+
+    ggml_tensor* output = nullptr;
+    if (method == "nchw") {
+        output = ggml_conv_transpose_2d_p0(graph_ctx, weight, input, stride);
+    } else if (method == "nhwc") {
+        weight = ggml_reshape_4d(graph_ctx, weight, ci, kw, kh, co);
+        weight = ggml_permute(graph_ctx, weight, 3, 0, 1, 2);
+        input = ggml_reshape_4d(graph_ctx, input, ci, w, h, n);
+        input = ggml_permute(graph_ctx, input, 2, 0, 1, 3);
+        output = ggml_conv_transpose_2d_p0(graph_ctx, weight, input, stride);
+        output = ggml_permute(graph_ctx, output, 1, 2, 0, 3);
+    } else {
+        fmt::print("Unknown method: {}\n", method);
+        return;
+    }
+    ggml_set_output(output);
+    ggml_build_forward_expand(graph, output);
+
+    ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
+    ggml_gallocr_alloc_graph(allocr, graph);
+
+    // warm-up
+    ggml_backend_graph_compute(backend, graph);
+
+    auto timings = std::vector<int64_t>(iter);
+    for (int i = 0; i < iter; ++i) {
+        auto time = ggml_time_us();
+        ggml_backend_graph_compute(backend, graph);
+        timings[i] = ggml_time_us() - time;
+    }
+    // compute time mean and std
+    double mean = 0;
+    for (int i = 0; i < iter; ++i) {
+        mean += timings[i];
+    }
+    mean /= iter;
+    double std = 0;
+    for (int i = 0; i < iter; ++i) {
+        std += (timings[i] - mean) * (timings[i] - mean);
+    }
+    std = std::sqrt(std / iter);
+
+    fmt::print("Conv transpose 2d: {} +/- {} ms\n", mean / 1000.0, std / 1000.0);
+
+    ggml_backend_tensor_get(output, output_data.data(), 0, ggml_nbytes(output));
+    // print_tensor(output);
+}
+
 } // namespace dlimg
 
 int main(int argc, char** argv) {
@@ -553,6 +649,8 @@ int main(int argc, char** argv) {
         dlimg::test_depthwise_conv_2d(argv[2]);
     } else if (arg1 == "conv_2d") {
         dlimg::test_conv_2d(argv[2]);
+    } else if (arg1 == "conv_transpose_2d") {
+        dlimg::test_conv_transpose_2d(argv[2]);
     } else if (arg1 == "vulkan") {
         dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
                              dlimg::Region{dlimg::Point{180, 110}, dlimg::Extent{325, 220}},

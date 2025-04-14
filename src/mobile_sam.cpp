@@ -60,15 +60,15 @@ Tensor conv_transpose_2d(Model m, Tensor x, int stride) {
     if (m.backend == GGMLBackend::cpu) {
         // TODO: ggml_conv_transpose_2d_p0 expects fp16 weights
         weight = ggml_cast(m, weight, GGML_TYPE_F16);
+        weight = ggml_cont(m, ggml_permute(m, weight, 3, 0, 1, 2));
         x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3));
         x = ggml_conv_transpose_2d_p0(m, weight, x, stride);
         x = ggml_cont(m, ggml_permute(m, x, 1, 2, 0, 3));
     } else {
-        weight = ggml_cont(m, ggml_permute(m, weight, 1, 2, 3, 0));
         weight = ggml_permute(m, weight, 3, 0, 1, 2);
         x = ggml_permute(m, x, 2, 0, 1, 3);
         x = ggml_conv_transpose_2d_p0(m, weight, x, stride);
-        x = ggml_reshape_4d(m, x, x->ne[2], x->ne[0], x->ne[1], x->ne[3]);
+        x = ggml_permute(m, x, 1, 2, 0, 3);
     }
     if (Tensor bias = m.find("bias")) {
         x = ggml_add_inplace(m, x, bias);

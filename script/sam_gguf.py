@@ -51,6 +51,9 @@ def conv_2d_kernel_to_nhwc(kernel: torch.Tensor):
     else:
         return kernel.permute(0, 2, 3, 1) # C_out H W C_in
 
+def conv_transpose_2d_kernel_to_nhwc(kernel: torch.Tensor):
+    # C_in C_out H W -> C_out H W C_in
+    return kernel.permute(1, 2, 3, 0)
 
 if len(sys.argv) < 3:
     print("Usage: sam_gguf.py file-model dir-output\n")
@@ -90,6 +93,9 @@ for name, tensor in model.items():
     if name.endswith("c.weight") or name.endswith("neck.0.weight") or name.endswith("neck.2.weight"):
         assert tensor.shape[2] == tensor.shape[3] and tensor.shape[2] <= 3
         tensor = conv_2d_kernel_to_nhwc(tensor)
+
+    if "output_upscaling" in name and tensor.dim() == 4:
+        tensor = conv_transpose_2d_kernel_to_nhwc(tensor)
 
     # Precompute dense positional embeddings from random matrix stored in the model
     if name == "prompt_encoder.pe_layer.positional_encoding_gaussian_matrix":

@@ -120,8 +120,8 @@ def test_conv_transpose_2d(scenario:str):
         "5x5": (5, 1),
         "stride2": (3, 2),
     }[scenario]
-    x = torch.arange(3 * 4 * 5).reshape(1, 3, 4, 5).float()
-    weight = torch.arange(3 * 2 * ksize * ksize).reshape(3, 2, ksize, ksize).float()
+    x = torch.arange(11 * 4 * 5).reshape(1, 11, 4, 5).float()
+    weight = torch.arange(11 * 2 * ksize * ksize).reshape(11, 2, ksize, ksize).float()
     bias = None
     expected = torch.nn.functional.conv_transpose2d(x, weight, bias, stride=stride)
 
@@ -134,7 +134,6 @@ def test_conv_transpose_2d(scenario:str):
     )
     result = revert_channel_last(result)
 
-    # workbench.print_results(result, expected)
     assert torch.allclose(result, expected)
 
 
@@ -143,7 +142,7 @@ def test_batch_norm_2d():
     weight = torch.rand(3)
     bias = torch.rand(3)
     mean = torch.rand(3)
-    var = torch.rand(3)
+    var = torch.arange(1, 4).float()
     expected = torch.nn.functional.batch_norm(x, mean, var, weight, bias, eps=1e-5)
 
     x = to_channel_last(x)
