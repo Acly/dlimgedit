@@ -79,26 +79,27 @@ def test_conv_2d_channels(scenario: str, backend: str):
     assert torch.allclose(result, expected, rtol=1e-5 if backend == "cpu" else 1e-3)
 
 
-@pytest.mark.parametrize("scenario", ["stride_1_pad_0", "stride_2_pad_1"])
+@pytest.mark.parametrize(
+    "scenario", ["stride_1_pad_0", "stride_2_pad_1", "dilation_2_pad_2"]
+)
 @pytest.mark.parametrize("memory_layout", ["nchw", "nhwc"])
 @pytest.mark.parametrize("batch", ["single", "batch"])
 @pytest.mark.parametrize("backend", ["cpu", "vulkan"])
 def test_depthwise_conv_2d(scenario: str, memory_layout: str, batch: str, backend: str):
-    stride, pad = {"stride_1_pad_0": (1, 0), "stride_2_pad_1": (2, 1)}[scenario]
-    x1 = torch.tensor([[1, 2, 2, 1], [4, 4, 4, 4], [0, 2, 2, 4], [1, 1, 1, 1]]).float()
-    k = torch.tensor(
-        [
-            [[[1, 0, 1], [0, 1, 0], [1, 0, 1]]],
-            [[[1, 1, 1], [1, 1, 1], [1, 1, 1]]],
-            [[[0, -1, 0], [-1, 1, -1], [-1, 0, -1]]],
-        ]
-    ).float()
+    stride, pad, dilate = {
+        "stride_1_pad_0": (1, 0, 1),
+        "stride_2_pad_1": (2, 1, 1),
+        "dilation_2_pad_2": (1, 2, 2),
+    }[scenario]
+    x = torch.rand(1, 9, 5, 6).float()
+    k = torch.rand(9, 1, 3, 3).float()
 
-    x = torch.stack((x1, x1 * 2.0, x1 * 0.5)).reshape(1, 3, 4, 4)
     if batch == "batch":
         x = torch.cat((x, x * -1), dim=0)
 
-    expected = torch.nn.functional.conv2d(x, k, stride=stride, padding=pad, groups=3)
+    expected = torch.nn.functional.conv2d(
+        x, k, stride=stride, padding=pad, dilation=dilate, groups=k.shape[0]
+    )
 
     result = torch.zeros_like(expected)
     if memory_layout == "nhwc":
@@ -114,7 +115,7 @@ def test_depthwise_conv_2d(scenario: str, memory_layout: str, batch: str, backen
 
 
 @pytest.mark.parametrize("scenario", ["3x3", "5x5", "stride2"])
-def test_conv_transpose_2d(scenario:str):
+def test_conv_transpose_2d(scenario: str):
     ksize, stride = {
         "3x3": (3, 1),
         "5x5": (5, 1),
@@ -130,7 +131,11 @@ def test_conv_transpose_2d(scenario:str):
     result = to_channel_last(torch.zeros_like(expected))
 
     workbench.invoke_test(
-        f"conv_transpose_2d_{scenario}", x, result, dict(weight=weight), backend="vulkan"
+        f"conv_transpose_2d_{scenario}",
+        x,
+        result,
+        dict(weight=weight),
+        backend="vulkan",
     )
     result = revert_channel_last(result)
 
@@ -167,3 +172,35 @@ def test_layer_norm():
 
     expected = torch.nn.functional.layer_norm(x, [dim], weight, bias, eps=1e-5)
     assert torch.allclose(result, expected, atol=1e-6)
+
+
+@pytest.mark.parametrize("backend", ["cpu", "vulkan"])
+def test_window_partition(backend: str):
+    win = 3
+    x = torch.arange(2 * 7 * 5).reshape(1, 5, 7, 2).float()
+    B, H, W, C = x.shape
+
+    pad_b = (win - H % win) % win
+    pad_r = (win - W % win) % win
+    padding = pad_b > 0 or pad_r > 0
+
+    expected = x
+    if padding:
+        expected = torch.nn.functional.pad(x, (0, 0, 0, pad_r, 0, pad_b))
+
+    pH, pW = H + pad_b, W + pad_r
+    nH = pH // win
+    nW = pW // win
+    # window partition
+    expected = (
+        expected.view(B, nH, win, nW, win, C)
+        .transpose(2, 3)
+        .reshape(B * nH * nW, win * win, C)
+    )
+
+    result = torch.zeros_like(expected)
+    workbench.invoke_test("window_partition", x, result, {}, backend=backend)
+
+    workbench.print_results(result, expected)    
+    assert torch.allclose(result, expected)
+

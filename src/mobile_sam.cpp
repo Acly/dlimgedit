@@ -50,7 +50,7 @@ Tensor conv_2d(Model m, Tensor x, int stride, int pad) {
 Tensor depthwise_conv_2d(Model m, Tensor x, int stride, int pad) {
     Tensor weight = ggml_permute(m, m.weights("weight"), 3, 2, 0, 1);
     x = ggml_permute(m, x, 2, 0, 1, 3);
-    x = ggml_depthwise_conv_2d(m, weight, x, stride, stride, pad, pad);
+    x = ggml_conv_2d_dw_direct(m, weight, x, stride, stride, pad, pad, 1, 1);
     x = ggml_permute(m, x, 1, 2, 0, 3);
     return x;
 }

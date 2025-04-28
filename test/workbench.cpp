@@ -29,7 +29,7 @@ Tensor conv_2d_nchw(Model m, Tensor x, int stride = 1, int pad = 0) {
 }
 
 Tensor depthwise_conv_2d_nchw(Model m, Tensor x, int stride = 1, int pad = 0) {
-    return ggml_depthwise_conv_2d(m, m.weights("weight"), x, stride, stride, pad, pad);
+    return ggml_conv_2d_dw_direct(m, m.weights("weight"), x, stride, stride, pad, pad, 1, 1);
 }
 
 struct RawTensor {
@@ -135,6 +135,15 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             w.output(depthwise_conv_2d(w.model, input), output);
         } else if (name == "conv_2d_depthwise_nhwc_stride_2_pad_1") {
             w.output(depthwise_conv_2d(w.model, input, 2, 1), output);
+        } else if (name == "conv_2d_depthwise_nchw_dilation_2_pad_2") {
+            w.output(ggml_conv_2d_dw_direct(
+                w.model, w.model.weights("weight"), input, 1, 1, 2, 2, 2, 2), output);
+        } else if (name == "conv_2d_depthwise_nhwc_dilation_2_pad_2") {
+            Tensor weight = ggml_permute(w.model, w.model.weights("weight"), 3, 2, 0, 1);
+            input = ggml_permute(w.model, input, 2, 0, 1, 3);
+            Tensor result = ggml_conv_2d_dw_direct(w.model, weight, input, 1, 1, 2, 2, 2, 2);
+            result = ggml_permute(w.model, result, 1, 2, 0, 3);
+            w.output(result, output);
         } else if (name == "conv_2d") {
             w.output(conv_2d_nchw(w.model, input), output);
         } else if (name.starts_with("conv_2d_channels_stride2_pad1")) {
@@ -165,6 +174,8 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             w.output(mlp(w.model, input), output);
         } else if (name == "attention_rel_bias") {
             w.output(attention_rel_bias(w.model, input, 4, 2), output);
+        } else if (name == "window_partition") {
+            w.output(window_partition(w.model, input, 3), output);
         } else if (name == "tiny_vit_block") {
             w.output(tiny_vit_block(w.model, input, 8, /*dim*/ 4, /*num_heads*/ 2,
                                     /*window_size*/ 5),

@@ -385,13 +385,13 @@ void test_depthwise_conv_2d(std::string_view method) {
 
     ggml_tensor* output = nullptr;
     if (method == "nchw") {
-        output = ggml_depthwise_conv_2d(graph_ctx, weight, input, stride, stride, pad, pad);
+        output = ggml_conv_2d_dw_direct(graph_ctx, weight, input, stride, stride, pad, pad, 1, 1);
     } else if (method == "nhwc") {
         weight = ggml_reshape_4d(graph_ctx, weight, c, 1, kw, kh);
         weight = ggml_permute(graph_ctx, weight, 3, 2, 0, 1);
         input = ggml_reshape_4d(graph_ctx, input, c, w, h, n);
         input = ggml_permute(graph_ctx, input, 2, 0, 1, 3);
-        output = ggml_depthwise_conv_2d(graph_ctx, weight, input, stride, stride, pad, pad);
+        output = ggml_conv_2d_dw_direct(graph_ctx, weight, input, stride, stride, pad, pad, 1, 1);
         output = ggml_permute(graph_ctx, output, 1, 2, 0, 3);
     } else if (method == "old") {
         output = ggml_conv_2d_dw_f32(graph_ctx, weight, input, stride, stride, pad, pad, 1, 1);

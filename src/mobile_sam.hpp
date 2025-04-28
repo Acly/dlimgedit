@@ -58,6 +58,8 @@ Tensor mb_conv(Model m, Tensor x);
 Tensor patch_merging(Model m, Tensor x, int input_resolution);
 Tensor mlp(Model m, Tensor x);
 Tensor attention_rel_bias(Model m, Tensor x, int dim, int num_heads);
+Tensor window_partition(Model m, Tensor x, int window);
+Tensor window_reverse(Model m, Tensor x, int w, int h, int window);
 Tensor tiny_vit_block(Model m, Tensor x, int input_resolution, int dim, int num_heads,
                       int window_size);
 Tensor conv_layer(Model m, Tensor x, TinyViTParams::Layer p);
