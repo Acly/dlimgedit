@@ -341,7 +341,7 @@ void test_depthwise_conv_2d(std::string_view method) {
     int c = 256;
     int w = 512;
     int h = 512;
-    int n = 2;
+    int n = 1;
     int stride = 1;
     int pad = 1;
     int kw = 3;
@@ -368,10 +368,8 @@ void test_depthwise_conv_2d(std::string_view method) {
     ggml_set_input(input);
     ggml_set_input(weight);
 
-    ggml_backend_t backends[] = {ggml_backend_vk_init(0), ggml_backend_cpu_init()};
-    ggml_backend_cpu_set_n_threads(backends[1], 6);
-    ggml_backend_buffer_t buffer1 = ggml_backend_alloc_ctx_tensors(ctx, backends[1]);
-    ggml_backend_buffer_t buffer0 = ggml_backend_alloc_ctx_tensors(ctx, backends[0]);
+    ggml_backend_t backend = ggml_backend_vk_init(0);
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
 
     ggml_backend_tensor_set(input, input_data.data(), 0, input_data.size() * sizeof(float));
     ggml_backend_tensor_set(weight, weight_data.data(), 0, weight_data.size() * sizeof(float));
@@ -402,20 +400,16 @@ void test_depthwise_conv_2d(std::string_view method) {
     ggml_set_output(output);
     ggml_build_forward_expand(graph, output);
 
-    ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backends[0]));
+    ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
     ggml_gallocr_alloc_graph(allocr, graph);
 
-    ggml_backend_buffer_type_t buffer_types[] = {ggml_backend_get_default_buffer_type(backends[0]),
-                                                 ggml_backend_get_default_buffer_type(backends[1])};
-    auto sched = ggml_backend_sched_new(backends, buffer_types, 2, ggml_graph_size(graph), false);
-
     // warm-up
-    ggml_backend_sched_graph_compute(sched, graph);
+    ggml_backend_graph_compute(backend, graph);
 
     auto timings = std::vector<int64_t>(iter);
     for (int i = 0; i < iter; ++i) {
         auto time = ggml_time_us();
-        ggml_backend_sched_graph_compute(sched, graph);
+        ggml_backend_graph_compute(backend, graph);
         timings[i] = ggml_time_us() - time;
     }
     // compute time mean and std
@@ -547,7 +541,7 @@ void test_conv_2d(std::string_view method) {
 
 void test_conv_transpose_2d(std::string_view method) {
     ggml_time_init();
-    const int iter = 20;
+    const int iter = 10;
 
     int ci = 128;
     int co = 160;
