@@ -6,16 +6,9 @@ import pytest
 from torch import Tensor
 
 from . import workbench
-from .workbench import to_channel_last, revert_channel_last
+from .workbench import to_channel_last, revert_channel_last, convert_to_channel_last
 
 torch.set_printoptions(precision=2, linewidth=200, edgeitems=8)
-
-
-def convert_to_channel_last(state: dict[str, torch.Tensor], key="c.weight"):
-    for k, v in state.items():
-        if k.endswith(key):
-            state[k] = v.permute(2, 3, 1, 0).contiguous()
-    return state
 
 
 #

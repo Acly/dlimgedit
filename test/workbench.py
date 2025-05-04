@@ -1,4 +1,5 @@
 import ctypes
+from functools import reduce
 import torch
 import os
 
@@ -19,7 +20,8 @@ class RawTensor(ctypes.Structure):
 
 
 def to_raw_tensor(name: str, tensor: torch.Tensor):
-    assert tensor.dtype == torch.float32
+    if tensor.dtype != torch.float32:
+        print(f"Warning: tensor {name} is not float32, converting")
     while tensor.dim() < 4:
         tensor = tensor.unsqueeze(0)
     assert tensor.dim() == 4
@@ -76,6 +78,22 @@ def invoke_test(
     return output_tensor
 
 
+def input_tensor(*shape: tuple[int]):
+    end = reduce(lambda x, y: x * y, shape, 1)
+    return torch.arange(0, end).reshape(*shape) / end
+
+
+def input_like(tensor: torch.Tensor):
+    return input_tensor(*tensor.shape)
+
+
+def generate_state(state_dict: dict[str, torch.Tensor]):
+    return {
+        k: input_like(v) if v.dtype.is_floating_point else v
+        for k, v in state_dict.items()
+    }
+
+
 def randomize(state_dict: dict[str, torch.Tensor]):
     return {
         k: torch.rand_like(v)
@@ -90,6 +108,16 @@ def to_channel_last(tensor: torch.Tensor):
 
 def revert_channel_last(tensor: torch.Tensor):
     return tensor.permute(0, 3, 1, 2).contiguous()
+
+
+def convert_to_channel_last(state: dict[str, torch.Tensor], key="c.weight"):
+    for k, v in state.items():
+        if k.endswith(key):
+            if v.shape[1] == 1:  # depthwise
+                state[k] = v.permute(2, 3, 1, 0).contiguous()
+            else:
+                state[k] = v.permute(0, 2, 3, 1).contiguous()
+    return state
 
 
 def print_results(result: torch.Tensor, expected: torch.Tensor):

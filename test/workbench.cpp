@@ -1,4 +1,5 @@
 #include "mobile_sam.hpp"
+#include "birefnet.hpp"
 
 #include <fmt/format.h>
 #include <ggml-blas.h>
@@ -240,6 +241,10 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
                 w.model, image_embeddings, sparse_prompt, dense_prompt);
             w.output(masks, output);
             w.output(iou, inputs[input_count - 1]);
+        } else if (name == "biref_patch_embed") {
+            w.output(birefnet::patch_embed(w.model, input), output);
+        } else if (name == "biref_window_attention") {
+            w.output(birefnet::window_attention(w.model, input, 2), output);
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }
