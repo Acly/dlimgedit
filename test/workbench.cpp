@@ -159,6 +159,10 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             w.output(conv_transpose_2d(w.model, input, 1), output);
         } else if (name == "batch_norm_2d") {
             w.output(batch_norm_2d(w.model, input), output);
+        } else if (name == "roll_(0, 2, -1, 0)") {
+            w.output(ggml_roll(w.model, input, 0, -1, 2, 0), output);
+        } else if (name == "roll_(0, -2, 0, 3)") {
+            w.output(ggml_roll(w.model, input, 3, 0, -2, 0), output);
         } else if (name == "layer_norm") {
             w.output(layer_norm(w.model, input), output);
         } else if (name == "linear") {
@@ -244,7 +248,17 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
         } else if (name == "biref_patch_embed") {
             w.output(birefnet::patch_embed(w.model, input), output);
         } else if (name == "biref_window_attention") {
-            w.output(birefnet::window_attention(w.model, input, 2), output);
+            Tensor mask = w.model.find("mask");
+            w.output(birefnet::window_attention(w.model, input, mask, 2), output);
+        } else if (name == "biref_swin_block") {
+            birefnet::SwinBlockParams p;
+            p.num_heads = 2;
+            p.window_size = 3;
+            p.w = 6;
+            p.h = 6;
+            p.shift = 0;
+            Tensor mask = w.model.find("mask");
+            w.output(birefnet::swin_block(w.model, input, mask, p), output);
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }

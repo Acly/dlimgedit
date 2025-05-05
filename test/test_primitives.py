@@ -206,3 +206,15 @@ def test_window_partition(backend: str):
     workbench.invoke_test("window_partition", x, result, {}, backend=backend)
 
     assert torch.allclose(result, expected)
+
+@pytest.mark.parametrize("shift", [(0, 2, -1, 0), (0, -2, 0, 3)])
+def test_roll(shift: tuple[int, int, int, int]):
+    x = torch.arange(4 * 5 * 6).reshape(1, 4, 5, 6).float()
+    shifts = tuple(s for s in shift if s != 0)
+    dims = tuple(i for i, s in enumerate(shift) if s != 0)
+    expected = torch.roll(x, shifts=shifts, dims=dims)
+
+    result = torch.zeros_like(expected)
+    result = workbench.invoke_test(f"roll_{shift}", x, result, {})
+
+    assert torch.allclose(result, expected)
