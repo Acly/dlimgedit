@@ -108,9 +108,8 @@ class WindowAttention(nn.Module):
 
         if mask is not None:
             nW = mask.shape[0]
-            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(
-                1
-            ).unsqueeze(0)
+            mask = mask.unsqueeze(1).unsqueeze(0)
+            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask
             attn = attn.view(-1, self.num_heads, N, N)
             attn = self.softmax(attn)
         else:
@@ -324,6 +323,238 @@ def test_swin_block():
 
     workbench.print_results(result, expected)
     assert torch.allclose(result, expected, atol=1e-2)  # fp16 GELU
+
+
+class PatchMerging(nn.Module):
+    def __init__(self, dim, norm_layer=nn.LayerNorm):
+        super().__init__()
+        self.dim = dim
+        self.reduction = nn.Linear(4 * dim, 2 * dim, bias=False)
+        self.norm = norm_layer(4 * dim)
+
+    def forward(self, x, H, W):
+        B, L, C = x.shape
+        assert L == H * W, "input feature has wrong size"
+
+        x = x.view(B, H, W, C)
+
+        # padding
+        pad_input = (H % 2 == 1) or (W % 2 == 1)
+        if pad_input:
+            x = F.pad(x, (0, 0, 0, W % 2, 0, H % 2))
+
+        x0 = x[:, 0::2, 0::2, :]  # B H/2 W/2 C
+        x1 = x[:, 1::2, 0::2, :]  # B H/2 W/2 C
+        x2 = x[:, 0::2, 1::2, :]  # B H/2 W/2 C
+        x3 = x[:, 1::2, 1::2, :]  # B H/2 W/2 C
+        x = torch.cat([x0, x1, x2, x3], -1)  # B H/2 W/2 4*C
+        x = x.view(B, -1, 4 * C)  # B H/2*W/2 4*C
+
+        x = self.norm(x)
+        x = self.reduction(x)
+
+        return x
+
+
+def test_patch_merging():
+    patch_merging = PatchMerging(8)
+    state = generate_state(patch_merging.state_dict())
+    patch_merging.load_state_dict(state)
+    patch_merging.eval()
+
+    x = input_tensor(1, 4 * 6, 8)
+    expected = patch_merging(x, 4, 6)
+
+    result = torch.zeros_like(expected)
+    result = workbench.invoke_test("biref_patch_merging", x, result, state)
+
+    workbench.print_results(result, expected)
+    assert torch.allclose(result, expected)
+
+
+class BasicLayer(nn.Module):
+    def __init__(
+        self,
+        dim,
+        depth,
+        num_heads,
+        window_size=7,
+        mlp_ratio=4.0,
+        qkv_bias=True,
+        qk_scale=None,
+        drop=0.0,
+        attn_drop=0.0,
+        drop_path=0.0,
+        norm_layer=nn.LayerNorm,
+        downsample=None,
+        use_checkpoint=False,
+    ):
+        super().__init__()
+        self.window_size = window_size
+        self.shift_size = window_size // 2
+        self.depth = depth
+        self.use_checkpoint = use_checkpoint
+
+        # build blocks
+        self.blocks = nn.ModuleList(
+            [
+                SwinTransformerBlock(
+                    dim=dim,
+                    num_heads=num_heads,
+                    window_size=window_size,
+                    shift_size=0 if (i % 2 == 0) else window_size // 2,
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    qk_scale=qk_scale,
+                    drop=drop,
+                    attn_drop=attn_drop,
+                    drop_path=(
+                        drop_path[i] if isinstance(drop_path, list) else drop_path
+                    ),
+                    norm_layer=norm_layer,
+                )
+                for i in range(depth)
+            ]
+        )
+
+        # patch merging layer
+        if downsample is not None:
+            self.downsample = downsample(dim=dim, norm_layer=norm_layer)
+        else:
+            self.downsample = None
+
+    def attention_mask(self, H, W):
+        Hp = math.ceil(H / self.window_size) * self.window_size
+        Wp = math.ceil(W / self.window_size) * self.window_size
+        img_mask = torch.zeros((1, Hp, Wp, 1))  # 1 Hp Wp 1
+        h_slices = (
+            slice(0, -self.window_size),
+            slice(-self.window_size, -self.shift_size),
+            slice(-self.shift_size, None),
+        )
+        w_slices = (
+            slice(0, -self.window_size),
+            slice(-self.window_size, -self.shift_size),
+            slice(-self.shift_size, None),
+        )
+        cnt = 0
+        for h in h_slices:
+            for w in w_slices:
+                img_mask[:, h, w, :] = cnt
+                cnt += 1
+
+        mask_windows = window_partition(img_mask, self.window_size)
+        mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
+        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
+        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0))
+        attn_mask = attn_mask.masked_fill(attn_mask == 0, float(0.0))
+        return attn_mask
+
+    def forward(self, x, H, W):
+        # calculate attention mask for SW-MSA
+        # Turn int to torch.tensor for the compatiability with torch.compile in PyTorch 2.5.
+        Hp = (
+            torch.ceil(torch.tensor(H) / self.window_size).to(torch.int64)
+            * self.window_size
+        )
+        Wp = (
+            torch.ceil(torch.tensor(W) / self.window_size).to(torch.int64)
+            * self.window_size
+        )
+        img_mask = torch.zeros((1, Hp, Wp, 1), device=x.device)  # 1 Hp Wp 1
+        h_slices = (
+            slice(0, -self.window_size),
+            slice(-self.window_size, -self.shift_size),
+            slice(-self.shift_size, None),
+        )
+        w_slices = (
+            slice(0, -self.window_size),
+            slice(-self.window_size, -self.shift_size),
+            slice(-self.shift_size, None),
+        )
+        cnt = 0
+        for h in h_slices:
+            for w in w_slices:
+                img_mask[:, h, w, :] = cnt
+                cnt += 1
+
+        mask_windows = window_partition(
+            img_mask, self.window_size
+        )  # nW, window_size, window_size, 1
+        mask_windows = mask_windows.view(-1, self.window_size * self.window_size)
+        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
+        attn_mask = (
+            attn_mask.masked_fill(attn_mask != 0, float(-100.0))
+            .masked_fill(attn_mask == 0, float(0.0))
+            .to(x.dtype)
+        )
+
+        for blk in self.blocks:
+            blk.H, blk.W = H, W
+            x = blk(x, attn_mask)
+        if self.downsample is not None:
+            x_down = self.downsample(x, H, W)
+            Wh, Ww = (H + 1) // 2, (W + 1) // 2
+            return x, H, W, x_down, Wh, Ww
+        else:
+            return x, H, W, x, H, W
+
+
+def test_swin_layer():
+    num_heads = 2
+    depth = 2
+    swin_layer = BasicLayer(8, depth, num_heads, window_size=3, downsample=PatchMerging)
+    state = generate_state(swin_layer.state_dict())
+    swin_layer.load_state_dict(state)
+    swin_layer.eval()
+
+    print("attn_mask 8x8, win=3x3")
+    print(swin_layer.attention_mask(8, 8))
+
+    x = input_tensor(1, 36, 8)
+    expected, out_h, out_w, expected_down, out_wh, out_ww = swin_layer(x, 6, 6)
+
+    state = swin_layer.blocks[0].attn.dump_relative_position_bias(state)
+    result = torch.zeros_like(expected)
+    result = workbench.invoke_test("biref_swin_layer", x, result, state)
+
+    workbench.print_results(result, expected)
+    assert torch.allclose(result, expected)
+
+
+def test_attention_mask():
+    window_size = 6
+    shift_size = 3
+    w, h = 18, 18
+    swin_layer = BasicLayer(8, 2, 2, window_size=window_size)
+    expected = swin_layer.attention_mask(h, w)
+    print(expected)
+
+    wp = w
+    hp = h
+    nw = wp // window_size
+    nh = hp // window_size
+
+    result = torch.zeros_like(expected).reshape(nh, nw, window_size*window_size, window_size*window_size)
+    for wy, wx in itertools.product(range(nh), range(nw)):
+        if wy < nh - 1 and wx < nw - 1:
+            continue
+        for y0, x0 in itertools.product(range(window_size), range(window_size)):
+            for y1, x1 in itertools.product(range(window_size), range(window_size)):
+                yy0 = wy * window_size + y0
+                xx0 = wx * window_size + x0
+                yy1 = wy * window_size + y1
+                xx1 = wx * window_size + x1
+                b0 = (yy0 < hp - shift_size) == (yy1 < hp - shift_size)
+                b1 = (xx0 < wp - shift_size) == (xx1 < wp - shift_size)
+                if not b0 or not b1:
+                    result[wy, wx, y0 * window_size + x0, y1 * window_size + x1] = -100.0
+
+    result = result.reshape(nh*nw, window_size*window_size, window_size*window_size)
+
+    print(result)
+
+    assert torch.allclose(result, expected)
 
 
 class PatchEmbed(nn.Module):

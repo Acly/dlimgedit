@@ -140,6 +140,26 @@ inline Tensor swin_block(Model m, Tensor x, Tensor mask, SwinBlockParams const& 
     return m.named(x);
 }
 
+inline Tensor patch_merging(Model m, Tensor x, int w, int h) {
+    auto [c, n, b, _] = nelements(x);
+    ASSERT(n == w * h && "Spatial dimensions do not match");
+    ASSERT(w % 2 == 0 && h % 2 == 0 && "Expecting even spatial dimensions");
+
+    x = ggml_reshape_4d(m, x, c, w, h, b);
+    Tensor x0 = ggml_view_4d(m, x, c, w / 2, h / 2, b, x->nb[1] * 2, x->nb[2] * 2, x->nb[3], 0);
+    Tensor x1 = ggml_view_4d(m, x, c, w / 2, h / 2, b, x->nb[1] * 2, x->nb[2] * 2, x->nb[3], x->nb[2]);
+    Tensor x2 = ggml_view_4d(m, x, c, w / 2, h / 2, b, x->nb[1] * 2, x->nb[2] * 2, x->nb[3], x->nb[1]);
+    Tensor x3 = ggml_view_4d(m, x, c, w / 2, h / 2, b, x->nb[1] * 2, x->nb[2] * 2, x->nb[3], x->nb[1] + x->nb[2]);
+    x = ggml_concat(m, x0, x1, 0);
+    x = ggml_concat(m, x, x2, 0);
+    x = ggml_concat(m, x, x3, 0);
+    x = ggml_reshape_3d(m, x, c * 4, n / 4, b);
+
+    x = layer_norm(m["norm"], x);
+    x = linear(m["reduction"], x);
+    return m.named(x);
+}
+
 inline Tensor patch_embed(Model m, Tensor x, int patch_size = 4) {
     ASSERT(x->ne[1] % patch_size == 0 && x->ne[2] % patch_size == 0);
 
@@ -201,6 +221,61 @@ inline SwinResult swin_transformer(Model m, Tensor x, SwinParams const& p) {
         outs[i] = out;
     }
     return outs;
+}
+
+inline size_t attention_mask_size(int64_t w, int64_t h, int window_size) {
+    int n = window_size;
+    int64_t nw_x = (w + n - 1) / n;
+    int64_t nw_y = (h + n - 1) / n;
+    return sizeof(float) * n * n * n * n * nw_x * nw_y;
+}
+
+inline void compute_attention_mask(float * out, int64_t w, int64_t h, int window_size) {
+    int n = window_size;
+    int n2 = n * n;
+    int n4 = n2 * n2;
+    int shift = window_size / 2;
+    int64_t nw_x = (w + n - 1) / n;
+    int64_t nw_y = (h + n - 1) / n;
+    int64_t w_pad = nw_x * n;
+    int64_t h_pad = nw_y * n;
+
+    // Tensor mask = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n2, n2, nw_x * nw_y);
+    // float * out = (float *) mask->data;
+    memset(out, 0, attention_mask_size(w, h, window_size));
+
+    for (int iw_y = 0; iw_y < nw_y; ++iw_y) {
+        for (int iw_x = 0; iw_x < nw_x; ++iw_x) {
+            // Skip all windows that aren't at the right or bottom edges of the image
+            if (iw_y < nw_y - 1 && iw_x < nw_x - 1) {
+                continue;
+            }
+            int64_t base = iw_y * nw_x * n4 + iw_x * n4;
+
+            for (int y0 = 0; y0 < n; ++y0) {
+                for (int x0 = 0; x0 < n; ++x0) {
+                    for (int y1 = 0; y1 < n; ++y1) {
+                        for (int x1 = 0; x1 < n; ++x1) {
+                            // Window-local coordinates to global image coordinates
+                            int yy0 = iw_y * n + y0;
+                            int xx0 = iw_x * n + x0;
+                            int yy1 = iw_y * n + y1;
+                            int xx1 = iw_x * n + x1;
+                            // Check if two patches being matched belong to the same window
+                            // that is: they are both in the shift zone, or both outside
+                            bool match_y = (yy0 < h_pad - shift) == (yy1 < h_pad - shift);
+                            bool match_x = (xx0 < w_pad - shift) == (xx1 < w_pad - shift);
+                            // If not, set mask to -100 (added to attention before softmax)
+                            if (!match_y || !match_x) {
+                                int64_t idx = base + (y0 * n + x0) * n2 + (y1 * n + x1);
+                                out[idx] = -100.f;
+                            }                                
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 } // namespace dlimg::birefnet

@@ -259,6 +259,11 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             p.shift = 0;
             Tensor mask = w.model.find("mask");
             w.output(birefnet::swin_block(w.model, input, mask, p), output);
+        } else if (name == "biref_patch_merging") {
+            w.output(birefnet::patch_merging(w.model, input, 6, 4), output);
+        } else if (name == "biref_attention_mask") {
+            birefnet::compute_attention_mask(output.data, 18, 18, 6);
+            return 0;
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }
