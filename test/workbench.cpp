@@ -1,5 +1,5 @@
-#include "mobile_sam.hpp"
 #include "birefnet.hpp"
+#include "mobile_sam.hpp"
 
 #include <fmt/format.h>
 #include <ggml-blas.h>
@@ -36,13 +36,12 @@ Tensor depthwise_conv_2d_nchw(Model m, Tensor x, int stride = 1, int pad = 0) {
 struct RawTensor {
     char const* name;
     float* data;
-    int32_t w;
-    int32_t h;
-    int32_t c;
-    int32_t n;
+    int32_t type_;
+    int32_t ne[4];
 
-    size_t size() const { return n * c * w * h; }
-    size_t size_bytes() const { return size() * sizeof(float); }
+    ggml_type type() const { return ggml_type(type_); }
+    size_t size() const { return ne[0] * ne[1] * ne[2] * ne[3]; }
+    size_t size_bytes() const { return size() * ggml_type_size(type()); }
 };
 
 struct Workbench {
@@ -68,11 +67,12 @@ struct Workbench {
 
         for (int i = 0; i < input_count; ++i) {
             auto& raw = inputs_raw[i];
-            auto tensor = ggml_new_tensor_4d(model, GGML_TYPE_F32, raw.w, raw.h, raw.c, raw.n);
+            auto tensor = ggml_new_tensor_4d(
+                model, GGML_TYPE_F32, raw.ne[0], raw.ne[1], raw.ne[2], raw.ne[3]);
             ggml_set_name(tensor, raw.name);
         }
-        auto output = ggml_new_tensor_4d(
-            model, GGML_TYPE_F32, output_raw.w, output_raw.h, output_raw.c, output_raw.n);
+        auto output = ggml_new_tensor_4d(model, GGML_TYPE_F32, output_raw.ne[0], output_raw.ne[1],
+                                         output_raw.ne[2], output_raw.ne[3]);
         ggml_set_name(output, output_raw.name);
 
         ggml_backend_alloc_ctx_tensors(model, backends[0]);
@@ -137,8 +137,9 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
         } else if (name == "conv_2d_depthwise_nhwc_stride_2_pad_1") {
             w.output(depthwise_conv_2d(w.model, input, 2, 1), output);
         } else if (name == "conv_2d_depthwise_nchw_dilation_2_pad_2") {
-            w.output(ggml_conv_2d_dw_direct(
-                w.model, w.model.weights("weight"), input, 1, 1, 2, 2, 2, 2), output);
+            w.output(
+                ggml_conv_2d_dw_direct(w.model, w.model.weights("weight"), input, 1, 1, 2, 2, 2, 2),
+                output);
         } else if (name == "conv_2d_depthwise_nhwc_dilation_2_pad_2") {
             Tensor weight = ggml_permute(w.model, w.model.weights("weight"), 3, 2, 0, 1);
             input = ggml_permute(w.model, input, 2, 0, 1, 3);
@@ -154,7 +155,8 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
         } else if (name.starts_with("conv_transpose_2d_stride2")) {
             w.output(conv_transpose_2d(w.model, input, 2), output);
         } else if (name.starts_with("conv_transpose_2d_nchw")) {
-            w.output(ggml_conv_transpose_2d_p0(w.model, w.model.weights("weight"), input, 1), output);
+            w.output(
+                ggml_conv_transpose_2d_p0(w.model, w.model.weights("weight"), input, 1), output);
         } else if (name.starts_with("conv_transpose_2d")) {
             w.output(conv_transpose_2d(w.model, input, 1), output);
         } else if (name == "batch_norm_2d") {
@@ -247,9 +249,14 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             w.output(iou, inputs[input_count - 1]);
         } else if (name == "biref_patch_embed") {
             w.output(birefnet::patch_embed(w.model, input), output);
+        } else if (name == "biref_relative_position_index") {
+            birefnet::compute_relative_position_index(reinterpret_cast<int32_t*>(output.data), 3);
+            return 0;
         } else if (name == "biref_window_attention") {
+            int window_size = 3;
             Tensor mask = w.model.find("mask");
-            w.output(birefnet::window_attention(w.model, input, mask, 2), output);
+            auto rel_pos_index = birefnet::create_relative_position_index(w.model, window_size);
+            w.output(birefnet::window_attention(w.model, input, mask, 2, window_size), output);
         } else if (name == "biref_swin_block") {
             birefnet::SwinBlockParams p;
             p.num_heads = 2;
@@ -258,12 +265,23 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             p.h = 6;
             p.shift = 0;
             Tensor mask = w.model.find("mask");
+            auto rel_pos_index = birefnet::create_relative_position_index(w.model, 3);
             w.output(birefnet::swin_block(w.model, input, mask, p), output);
         } else if (name == "biref_patch_merging") {
             w.output(birefnet::patch_merging(w.model, input, 6, 4), output);
         } else if (name == "biref_attention_mask") {
             birefnet::compute_attention_mask(output.data, 18, 18, 6);
             return 0;
+        } else if (name == "biref_swin_layer") {
+            birefnet::SwinLayer p;
+            p.depth = 2;
+            p.num_heads = 2;
+            p.num_features = 8;
+            p.downsample = true;
+            auto rel_pos_index = birefnet::create_relative_position_index(w.model, 3);
+            auto result = birefnet::swin_layer(w.model, input, 6, 6, p, 3);
+            ASSERT(result.w_down == 3 && result.h_down == 3);
+            w.output(result.x_down, output);
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }

@@ -11,29 +11,37 @@ float_ptr = ctypes.POINTER(ctypes.c_float)
 class RawTensor(ctypes.Structure):
     _fields_ = [
         ("name", ctypes.c_char_p),
-        ("data", float_ptr),
-        ("w", ctypes.c_int),
-        ("h", ctypes.c_int),
-        ("c", ctypes.c_int),
-        ("n", ctypes.c_int),
+        ("data", ctypes.c_void_p),
+        ("type", ctypes.c_int),
+        ("ne", ctypes.c_int * 4),
     ]
 
 
+tensor_types = {
+    torch.float32: 0,  # GGML_TYPE_F32
+    torch.int32: 26,  # GGML_TYPE_I32
+}
+
+
 def to_raw_tensor(name: str, tensor: torch.Tensor):
-    if tensor.dtype != torch.float32:
-        print(f"Warning: tensor {name} is not float32, converting")
-    while tensor.dim() < 4:
-        tensor = tensor.unsqueeze(0)
-    assert tensor.dim() == 4
-    torch_tensor = tensor.contiguous().float()
+    t = tensor.contiguous()
+    if tensor.dtype not in tensor_types:
+        print(
+            f"Warning: tensor {name} has unsupported dtype {tensor.dtype}, converting to float"
+        )
+        t = t.to(torch.float32)
+    while t.dim() < 4:
+        t = t.unsqueeze(0)
+    assert t.dim() == 4
     raw_tensor = RawTensor()
     raw_tensor.name = name.encode()
-    raw_tensor.data = ctypes.cast(torch_tensor.data_ptr(), float_ptr)
-    raw_tensor.w = tensor.size(3)
-    raw_tensor.h = tensor.size(2)
-    raw_tensor.c = tensor.size(1)
-    raw_tensor.n = tensor.size(0)
-    return (raw_tensor, torch_tensor)
+    raw_tensor.data = ctypes.cast(t.data_ptr(), ctypes.c_void_p)
+    raw_tensor.type = tensor_types[t.dtype]
+    raw_tensor.ne[0] = t.size(3)
+    raw_tensor.ne[1] = t.size(2)
+    raw_tensor.ne[2] = t.size(1)
+    raw_tensor.ne[3] = t.size(0)
+    return (raw_tensor, t)
 
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = (

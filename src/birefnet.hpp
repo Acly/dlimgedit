@@ -13,11 +13,44 @@ using sam::conv_2d;
 using sam::layer_norm;
 using sam::linear;
 
+template <typename T>
+struct TensorAlloc {
+    Tensor tensor;
+    std::unique_ptr<T[]> data;
+
+    explicit TensorAlloc(Tensor tensor) : tensor(tensor) {
+        data = std::unique_ptr<T[]>(new T[ggml_nelements(tensor)]);
+        tensor->data = data.get();
+    }
+};
+
 inline Tensor mlp(Model m, Tensor x) {
     x = linear(m["fc1"], x);
     x = ggml_gelu_inplace(m, x);
     x = linear(m["fc2"], x);
     return m.named(x);
+}
+
+inline void compute_relative_position_index(int32_t* dst, int window_size) {
+    int n = window_size;
+    int n2 = n * n;
+    int n4 = n2 * n2;
+    for (int i = 0; i < n4; ++i) {
+        int x0 = i % n;
+        int y0 = (i / n) % n;
+        int x1 = (i / n2) % n;
+        int y1 = (i / n2 / n) % n;
+        dst[i] = (y1 - y0 + n - 1) * (2 * n - 1) + (x1 - x0 + n - 1);
+    }
+}
+
+inline TensorAlloc<int32_t> create_relative_position_index(ggml_context* ctx, int window_size) {
+    int n = window_size;
+    auto result = TensorAlloc<int32_t>(ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n * n * n * n));
+    auto name = TensorName("window_attention_{}.rel_pos_index", n);
+    compute_relative_position_index(result.data.get(), n);
+    ggml_set_name(result.tensor, name.c_str());
+    return result;
 }
 
 inline Tensor window_partition(Model m, Tensor x, int window) {
@@ -41,9 +74,7 @@ inline Tensor window_reverse(Model m, Tensor x, int w, int h, int window) {
     return x;
 }
 
-inline Tensor window_attention(Model m, Tensor x, Tensor mask, int num_heads) {
-    auto rel_pos_bias = m.with_prefix(TensorName("window_attention_{}", num_heads))
-                            .weights("relative_position_bias");
+inline Tensor window_attention(Model m, Tensor x, Tensor mask, int num_heads, int window) {
     auto [c, n, b, _] = nelements(x);
 
     Tensor qkv = linear(m["qkv"], x);
@@ -69,6 +100,13 @@ inline Tensor window_attention(Model m, Tensor x, Tensor mask, int num_heads) {
     q = ggml_scale_inplace(m, q, 1.0f / std::sqrtf(float(c / num_heads)));
 
     Tensor attn = ggml_mul_mat(m, k, q);
+
+    Tensor rel_pos_index =
+        m.with_prefix(TensorName("window_attention_{}", window)).weights("rel_pos_index");
+    Tensor rel_pos_table = m.weights("relative_position_bias_table");
+    Tensor rel_pos_bias = ggml_get_rows(m, rel_pos_table, rel_pos_index);
+    rel_pos_bias = ggml_reshape_4d(m, rel_pos_bias, num_heads, window * window, window * window, 1);
+    rel_pos_bias = ggml_cont(m, ggml_permute(m, rel_pos_bias, 2, 0, 1, 3));
     attn = ggml_add_inplace(m, attn, rel_pos_bias);
     if (mask) {
         int64_t nw = mask->ne[2];
@@ -90,8 +128,8 @@ inline Tensor window_attention(Model m, Tensor x, Tensor mask, int num_heads) {
 struct SwinBlockParams {
     int num_heads = 6;
     int window_size = 7;
-    int w = 0;
-    int h = 0;
+    int64_t w = 0;
+    int64_t h = 0;
     int shift = 0;
 };
 
@@ -116,7 +154,7 @@ inline Tensor swin_block(Model m, Tensor x, Tensor mask, SwinBlockParams const& 
     }
 
     x = window_partition(m, x, window);
-    x = window_attention(m["attn"], x, mask, num_heads);
+    x = window_attention(m["attn"], x, mask, num_heads, window);
     x = window_reverse(m, x, w, h, window);
 
     if (shift > 0) { // undo shift
@@ -147,9 +185,12 @@ inline Tensor patch_merging(Model m, Tensor x, int w, int h) {
 
     x = ggml_reshape_4d(m, x, c, w, h, b);
     Tensor x0 = ggml_view_4d(m, x, c, w / 2, h / 2, b, x->nb[1] * 2, x->nb[2] * 2, x->nb[3], 0);
-    Tensor x1 = ggml_view_4d(m, x, c, w / 2, h / 2, b, x->nb[1] * 2, x->nb[2] * 2, x->nb[3], x->nb[2]);
-    Tensor x2 = ggml_view_4d(m, x, c, w / 2, h / 2, b, x->nb[1] * 2, x->nb[2] * 2, x->nb[3], x->nb[1]);
-    Tensor x3 = ggml_view_4d(m, x, c, w / 2, h / 2, b, x->nb[1] * 2, x->nb[2] * 2, x->nb[3], x->nb[1] + x->nb[2]);
+    Tensor x1 = ggml_view_4d(
+        m, x, c, w / 2, h / 2, b, x->nb[1] * 2, x->nb[2] * 2, x->nb[3], x->nb[2]);
+    Tensor x2 = ggml_view_4d(
+        m, x, c, w / 2, h / 2, b, x->nb[1] * 2, x->nb[2] * 2, x->nb[3], x->nb[1]);
+    Tensor x3 = ggml_view_4d(
+        m, x, c, w / 2, h / 2, b, x->nb[1] * 2, x->nb[2] * 2, x->nb[3], x->nb[1] + x->nb[2]);
     x = ggml_concat(m, x0, x1, 0);
     x = ggml_concat(m, x, x2, 0);
     x = ggml_concat(m, x, x3, 0);
@@ -160,69 +201,6 @@ inline Tensor patch_merging(Model m, Tensor x, int w, int h) {
     return m.named(x);
 }
 
-inline Tensor patch_embed(Model m, Tensor x, int patch_size = 4) {
-    ASSERT(x->ne[1] % patch_size == 0 && x->ne[2] % patch_size == 0);
-
-    x = conv_2d(m["proj"], x, patch_size);
-    auto [c, ww, wh, b] = nelements(x);
-    x = ggml_reshape_3d(m, x, c, ww * wh, b);
-    x = layer_norm(m["norm"], x);
-    x = ggml_reshape_4d(m, x, c, ww, wh, b);
-    return m.named(x);
-}
-
-struct SwinLayer {
-    int depth;
-    int num_heads;
-    int num_features;
-};
-
-struct SwinLayerResult {
-    Tensor x;
-    Tensor x_out;
-    int64_t ww;
-    int64_t wh;
-    int64_t w;
-    int64_t h;
-};
-
-inline SwinLayerResult swin_layer(Model m, Tensor x, int64_t ww, int64_t wh, SwinLayer const& p) {
-    return {};
-}
-
-struct SwinParams {
-    static const int num_layers = 4;
-
-    int embed_dim = 96;
-    int window_size = 7;
-    std::array<SwinLayer, num_layers> layers = {SwinLayer{2, 6, 96 * 1}, SwinLayer{2, 12, 96 * 2},
-                                                SwinLayer{18, 24, 96 * 4},
-                                                SwinLayer{2, 48, 96 * 8}};
-};
-
-using SwinResult = std::array<Tensor, SwinParams::num_layers>;
-
-inline SwinResult swin_transformer(Model m, Tensor x, SwinParams const& p) {
-    x = patch_embed(m["patch_embed"], x, 4);
-
-    auto [c, ww, wh, b] = nelements(x);
-    x = ggml_reshape_3d(
-        m, x, c, ww * wh, b); // TODO: this just reverts the reshape at the end of patch_embed...
-
-    SwinLayerResult r{x, nullptr, ww, wh, 0, 0};
-    std::array<Tensor, SwinParams::num_layers> outs = {};
-
-    for (int i = 0; i < SwinParams::num_layers; ++i) {
-        auto layer = m["layers"][i];
-        r = swin_layer(layer, r.x, r.ww, r.wh, p.layers[i]);
-
-        Tensor out = layer_norm(layer["norm"], r.x_out);
-        out = ggml_reshape_4d(m, out, p.embed_dim * (2 << i), r.w, r.h, b);
-        outs[i] = out;
-    }
-    return outs;
-}
-
 inline size_t attention_mask_size(int64_t w, int64_t h, int window_size) {
     int n = window_size;
     int64_t nw_x = (w + n - 1) / n;
@@ -230,7 +208,7 @@ inline size_t attention_mask_size(int64_t w, int64_t h, int window_size) {
     return sizeof(float) * n * n * n * n * nw_x * nw_y;
 }
 
-inline void compute_attention_mask(float * out, int64_t w, int64_t h, int window_size) {
+inline void compute_attention_mask(float* out, int64_t w, int64_t h, int window_size) {
     int n = window_size;
     int n2 = n * n;
     int n4 = n2 * n2;
@@ -269,13 +247,146 @@ inline void compute_attention_mask(float * out, int64_t w, int64_t h, int window
                             if (!match_y || !match_x) {
                                 int64_t idx = base + (y0 * n + x0) * n2 + (y1 * n + x1);
                                 out[idx] = -100.f;
-                            }                                
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+struct SwinLayer {
+    int depth;
+    int num_heads;
+    int num_features;
+    bool downsample;
+};
+
+struct SwinLayerResult {
+    Tensor x_out;
+    int64_t w_out;
+    int64_t h_out;
+    Tensor x_down;
+    int64_t w_down;
+    int64_t h_down;
+};
+
+inline SwinLayerResult swin_layer(Model m, Tensor x, int64_t w, int64_t h, SwinLayer const& p,
+                                  int window_size) {
+    // Attention masks need to be precomputed and can be shared between layers
+    Tensor attn_mask = m.with_prefix(TensorName("swin_layer_{}x{}", w, h)).find("attn_mask");
+
+    Model blocks = m["blocks"];
+    for (int i = 0; i < p.depth; ++i) {
+        SwinBlockParams b = {.num_heads = p.num_heads,
+                             .window_size = window_size,
+                             .w = w,
+                             .h = h,
+                             .shift = i % 2 == 0 ? 0 : window_size / 2};
+        x = swin_block(blocks[i], x, attn_mask, b);
+    }
+    if (p.downsample) {
+        Tensor x_down = patch_merging(m["downsample"], x, w, h);
+        return {x, w, h, x_down, (w + 1) / 2, (h + 1) / 2};
+    }
+    return {x, w, h, x, w, h};
+}
+
+inline Tensor patch_embed(Model m, Tensor x, int patch_size = 4) {
+    ASSERT(x->ne[1] % patch_size == 0 && x->ne[2] % patch_size == 0);
+
+    x = conv_2d(m["proj"], x, patch_size);
+    auto [c, ww, wh, b] = nelements(x);
+    x = ggml_reshape_3d(m, x, c, ww * wh, b);
+    x = layer_norm(m["norm"], x);
+    x = ggml_reshape_4d(m, x, c, ww, wh, b);
+    return m.named(x);
+}
+
+struct SwinParams {
+    static constexpr int num_layers = 4;
+
+    int embed_dim;
+    int window_size;
+    std::array<SwinLayer, num_layers> layers;
+};
+
+using SwinResult = std::array<Tensor, SwinParams::num_layers>;
+
+inline SwinResult swin_transformer(Model m, Tensor x, SwinParams const& p) {
+    x = patch_embed(m["patch_embed"], x, 4);
+
+    auto [c, w, h, b] = nelements(x);
+    x = ggml_reshape_3d(m, x, c, w * h, b);
+
+    SwinLayerResult r{x, w, h, x, w, h};
+    SwinResult outs = {};
+
+    for (int i = 0; i < SwinParams::num_layers; ++i) {
+        auto layer = m["layers"][i];
+        r = swin_layer(layer, r.x_down, r.w_down, r.h_down, p.layers[i], p.window_size);
+
+        Tensor out = layer_norm(layer["norm"], r.x_out);
+        out = ggml_reshape_4d(m, out, p.layers[i].num_features, r.w_out, r.h_out, b);
+        outs[i] = out;
+    }
+    return outs;
+}
+
+// clang-format off
+
+constexpr SwinParams swin_t_params = {
+    .embed_dim = 96,
+    .window_size = 7,
+    .layers = {
+        //     depth  n_heads   n_features   downsample
+        SwinLayer{2,    3,        96 * 1,     true},
+        SwinLayer{2,    6,        96 * 2,     true},
+        SwinLayer{6,    12,       96 * 4,     true},
+        SwinLayer{2,    24,       96 * 8,     false}}};
+
+constexpr SwinParams swin_l_params = {
+    .embed_dim = 192,
+    .window_size = 12,
+    .layers = {
+        //     depth  n_heads   n_features   downsample
+        SwinLayer{2,    6,        192 * 1,     true},
+        SwinLayer{2,    12,       192 * 2,     true},
+        SwinLayer{18,   24,       192 * 4,     true},
+        SwinLayer{2,    48,       192 * 8,     false}}};
+
+// clang-format on
+
+inline Tensor downscale_by(Model m, Tensor x, int f) {
+    auto [c, w, h, b] = nelements(x);
+    ASSERT(w % f == 0 && h % f == 0 && "Expecting even spatial dimensions");
+    return ggml_view_4d(m, x, c, w / f, h / f, b, x->nb[1] * f, x->nb[2] * f, x->nb[3], 0);
+}
+
+inline Tensor upscale_to(Model m, Tensor x, Tensor target) {
+    return ggml_upscale_ext(
+        m, x, x->ne[0], target->ne[1], target->ne[2], x->ne[3], GGML_SCALE_MODE_BILINEAR);
+}
+
+inline SwinResult encode(Model m, Tensor x, SwinParams const& p) {
+    auto [c, w, h, b] = nelements(x);
+
+    auto xs = swin_transformer(m["bb"], x, p);
+    auto x_low = ggml_cont(m, downscale_by(m, x, 2));
+    auto xs_low = swin_transformer(m["bb"], x_low, p);
+
+    xs[0] = ggml_concat(m, xs[0], upscale_to(m, xs_low[0], xs[0]), 0);
+    xs[1] = ggml_concat(m, xs[1], upscale_to(m, xs_low[1], xs[1]), 0);
+    xs[2] = ggml_concat(m, xs[2], upscale_to(m, xs_low[2], xs[2]), 0);
+    xs[3] = ggml_concat(m, xs[3], upscale_to(m, xs_low[3], xs[3]), 0);
+
+    Tensor x3 = downscale_by(m, xs[0], 8);
+    x3 = ggml_concat(m, x3, downscale_by(m, xs[1], 4), 0);
+    x3 = ggml_concat(m, x3, downscale_by(m, xs[2], 2), 0);
+    xs[3] = ggml_concat(m, x3, xs[3], 0);
+
+    return xs;
 }
 
 } // namespace dlimg::birefnet

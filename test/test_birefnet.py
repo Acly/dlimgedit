@@ -66,21 +66,6 @@ class WindowAttention(nn.Module):
         trunc_normal_(self.relative_position_bias_table, std=0.02)
         self.softmax = nn.Softmax(dim=-1)
 
-    def dump_relative_position_bias(self, dest: dict[str, Tensor]):
-        relative_position_bias = self.relative_position_bias_table[
-            self.relative_position_index.view(-1)
-        ].view(
-            self.window_size[0] * self.window_size[1],
-            self.window_size[0] * self.window_size[1],
-            -1,
-        )  # Wh*Ww, Wh*Ww, nH
-        relative_position_bias = relative_position_bias.permute(
-            2, 0, 1
-        ).contiguous()  # nH, Wh*Ww, Wh*Ww
-        state_dict_name = f"window_attention_{self.num_heads}.relative_position_bias"
-        dest[state_dict_name] = relative_position_bias.unsqueeze(0)
-        return dest
-
     def forward(self, x, mask=None):
         B_, N, C = x.shape
         qkv = (
@@ -124,6 +109,17 @@ class WindowAttention(nn.Module):
         return x
 
 
+def test_relative_position_index():
+    window_attention = WindowAttention(dim=8, window_size=(3, 3), num_heads=2)
+    expected = window_attention.relative_position_index
+
+    result = torch.zeros_like(expected, dtype=torch.int32)
+    result = workbench.invoke_test("biref_relative_position_index", result, result, {})
+    result = result.to(expected.dtype)
+
+    assert torch.allclose(result, expected)
+
+
 @pytest.mark.parametrize("masking", ["mask", "no_mask"])
 def test_window_attention(masking: bool):
     num_heads = 2
@@ -139,7 +135,6 @@ def test_window_attention(masking: bool):
         state["mask"] = mask
     expected = window_attention(x, mask)
 
-    window_attention.dump_relative_position_bias(state)
     result = torch.zeros_like(expected)
     result = workbench.invoke_test("biref_window_attention", x, result, state)
 
@@ -317,7 +312,6 @@ def test_swin_block():
     swin_block.W, swin_block.H = 6, 6
     expected = swin_block(x, None)
 
-    swin_block.attn.dump_relative_position_bias(state)
     result = torch.zeros_like(expected)
     result = workbench.invoke_test("biref_swin_block", x, result, state)
 
@@ -500,60 +494,43 @@ class BasicLayer(nn.Module):
             return x, H, W, x, H, W
 
 
+def test_attention_mask():
+    window_size = 6
+    w, h = 18, 18
+    swin_layer = BasicLayer(8, 2, 2, window_size=window_size)
+    expected = swin_layer.attention_mask(h, w)
+
+    result = torch.zeros_like(expected)
+    workbench.invoke_test("biref_attention_mask", expected, result, {})
+
+    assert torch.allclose(result, expected)
+
+
 def test_swin_layer():
     num_heads = 2
     depth = 2
-    swin_layer = BasicLayer(8, depth, num_heads, window_size=3, downsample=PatchMerging)
+    w, h = 6, 6
+    win = 3
+    swin_layer = BasicLayer(
+        8, depth, num_heads, window_size=win, downsample=PatchMerging
+    )
     state = generate_state(swin_layer.state_dict())
     swin_layer.load_state_dict(state)
     swin_layer.eval()
 
-    print("attn_mask 8x8, win=3x3")
-    print(swin_layer.attention_mask(8, 8))
+    ww = math.ceil(w / win) * win
+    wh = math.ceil(h / win) * win
+    attn_mask = swin_layer.attention_mask(ww, wh)
+    state[f"swin_layer_{w}x{h}.attn_mask"] = attn_mask
 
-    x = input_tensor(1, 36, 8)
-    expected, out_h, out_w, expected_down, out_wh, out_ww = swin_layer(x, 6, 6)
+    x = input_tensor(1, w * h, 8)
+    out, out_h, out_w, expected, down_h, down_w = swin_layer(x, 6, 6)
+    assert down_h == 3 and down_w == 3
 
-    state = swin_layer.blocks[0].attn.dump_relative_position_bias(state)
     result = torch.zeros_like(expected)
     result = workbench.invoke_test("biref_swin_layer", x, result, state)
 
     workbench.print_results(result, expected)
-    assert torch.allclose(result, expected)
-
-
-def test_attention_mask():
-    window_size = 6
-    shift_size = 3
-    w, h = 18, 18
-    swin_layer = BasicLayer(8, 2, 2, window_size=window_size)
-    expected = swin_layer.attention_mask(h, w)
-    print(expected)
-
-    wp = w
-    hp = h
-    nw = wp // window_size
-    nh = hp // window_size
-
-    result = torch.zeros_like(expected).reshape(nh, nw, window_size*window_size, window_size*window_size)
-    for wy, wx in itertools.product(range(nh), range(nw)):
-        if wy < nh - 1 and wx < nw - 1:
-            continue
-        for y0, x0 in itertools.product(range(window_size), range(window_size)):
-            for y1, x1 in itertools.product(range(window_size), range(window_size)):
-                yy0 = wy * window_size + y0
-                xx0 = wx * window_size + x0
-                yy1 = wy * window_size + y1
-                xx1 = wx * window_size + x1
-                b0 = (yy0 < hp - shift_size) == (yy1 < hp - shift_size)
-                b1 = (xx0 < wp - shift_size) == (xx1 < wp - shift_size)
-                if not b0 or not b1:
-                    result[wy, wx, y0 * window_size + x0, y1 * window_size + x1] = -100.0
-
-    result = result.reshape(nh*nw, window_size*window_size, window_size*window_size)
-
-    print(result)
-
     assert torch.allclose(result, expected)
 
 
