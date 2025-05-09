@@ -256,6 +256,8 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             int window_size = 3;
             Tensor mask = w.model.find("mask");
             auto rel_pos_index = birefnet::create_relative_position_index(w.model, window_size);
+            ggml_backend_alloc_ctx_tensors(w.model, w.backends[0]);
+            rel_pos_index.copy_to_backend_buffer();
             w.output(birefnet::window_attention(w.model, input, mask, 2, window_size), output);
         } else if (name == "biref_swin_block") {
             birefnet::SwinBlockParams p;
@@ -266,6 +268,8 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             p.shift = 0;
             Tensor mask = w.model.find("mask");
             auto rel_pos_index = birefnet::create_relative_position_index(w.model, 3);
+            ggml_backend_alloc_ctx_tensors(w.model, w.backends[0]);
+            rel_pos_index.copy_to_backend_buffer();
             w.output(birefnet::swin_block(w.model, input, mask, p), output);
         } else if (name == "biref_patch_merging") {
             w.output(birefnet::patch_merging(w.model, input, 6, 4), output);
@@ -282,6 +286,30 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             auto result = birefnet::swin_layer(w.model, input, 6, 6, p, 3);
             ASSERT(result.w_down == 3 && result.h_down == 3);
             w.output(result.x_down, output);
+        } else if (name == "biref_swin_transformer") {
+            birefnet::SwinParams p = {.embed_dim = 8,
+                                      .window_size = 3,
+                                      .layers = {
+                                          birefnet::SwinLayer{2, 2, 8 * 1, true},
+                                          birefnet::SwinLayer{2, 2, 8 * 2, true},
+                                          birefnet::SwinLayer{2, 4, 8 * 4, true},
+                                          birefnet::SwinLayer{2, 2, 8 * 8, false},
+                                      }};
+            auto rel_pos_index = birefnet::create_relative_position_index(w.model, 3);
+            auto attn_masks = std::array{birefnet::create_attention_mask(w.model, 8, 8, 3),
+                                         birefnet::create_attention_mask(w.model, 4, 4, 3),
+                                         birefnet::create_attention_mask(w.model, 2, 2, 3),
+                                         birefnet::create_attention_mask(w.model, 1, 1, 3)};
+            ggml_backend_alloc_ctx_tensors(w.model, w.backends[0]);
+            rel_pos_index.copy_to_backend_buffer();
+            for (auto&& attn_mask : attn_masks) {
+                attn_mask.copy_to_backend_buffer();
+            }
+            auto result = birefnet::swin_transformer(w.model, input, p);
+            w.output(result[0], output);
+            w.output(result[1], inputs[input_count - 3]);
+            w.output(result[2], inputs[input_count - 2]);
+            w.output(result[3], inputs[input_count - 1]);
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }

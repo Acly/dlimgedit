@@ -20,7 +20,10 @@ struct TensorAlloc {
 
     explicit TensorAlloc(Tensor tensor) : tensor(tensor) {
         data = std::unique_ptr<T[]>(new T[ggml_nelements(tensor)]);
-        tensor->data = data.get();
+    }
+
+    void copy_to_backend_buffer() const {
+        ggml_backend_tensor_set(tensor, data.get(), 0, ggml_nbytes(tensor));
     }
 };
 
@@ -155,7 +158,7 @@ inline Tensor swin_block(Model m, Tensor x, Tensor mask, SwinBlockParams const& 
 
     x = window_partition(m, x, window);
     x = window_attention(m["attn"], x, mask, num_heads, window);
-    x = window_reverse(m, x, w, h, window);
+    x = window_reverse(m, x, w + pad_r, h + pad_b, window);
 
     if (shift > 0) { // undo shift
         x = ggml_roll(m, x, 0, shift, shift, 0);
@@ -201,13 +204,6 @@ inline Tensor patch_merging(Model m, Tensor x, int w, int h) {
     return m.named(x);
 }
 
-inline size_t attention_mask_size(int64_t w, int64_t h, int window_size) {
-    int n = window_size;
-    int64_t nw_x = (w + n - 1) / n;
-    int64_t nw_y = (h + n - 1) / n;
-    return sizeof(float) * n * n * n * n * nw_x * nw_y;
-}
-
 inline void compute_attention_mask(float* out, int64_t w, int64_t h, int window_size) {
     int n = window_size;
     int n2 = n * n;
@@ -218,9 +214,7 @@ inline void compute_attention_mask(float* out, int64_t w, int64_t h, int window_
     int64_t w_pad = nw_x * n;
     int64_t h_pad = nw_y * n;
 
-    // Tensor mask = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n2, n2, nw_x * nw_y);
-    // float * out = (float *) mask->data;
-    memset(out, 0, attention_mask_size(w, h, window_size));
+    memset(out, 0, n4 * nw_x * nw_y * sizeof(float));
 
     for (int iw_y = 0; iw_y < nw_y; ++iw_y) {
         for (int iw_x = 0; iw_x < nw_x; ++iw_x) {
@@ -256,6 +250,19 @@ inline void compute_attention_mask(float* out, int64_t w, int64_t h, int window_
     }
 }
 
+inline TensorAlloc<float> create_attention_mask(ggml_context* ctx, int64_t w, int64_t h,
+                                                int window_size) {
+    int n = window_size;
+    int64_t nw_x = (w + n - 1) / n;
+    int64_t nw_y = (h + n - 1) / n;
+    auto result =
+        TensorAlloc<float>(ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n * n, n * n, nw_x * nw_y));
+    auto name = TensorName("swin_layer_{}x{}.attn_mask", w, h);
+    compute_attention_mask(result.data.get(), w, h, window_size);
+    ggml_set_name(result.tensor, name.c_str());
+    return result;
+}
+
 struct SwinLayer {
     int depth;
     int num_heads;
@@ -274,7 +281,7 @@ struct SwinLayerResult {
 
 inline SwinLayerResult swin_layer(Model m, Tensor x, int64_t w, int64_t h, SwinLayer const& p,
                                   int window_size) {
-    // Attention masks need to be precomputed and can be shared between layers
+    // Attention masks need to be precomputed
     Tensor attn_mask = m.with_prefix(TensorName("swin_layer_{}x{}", w, h)).find("attn_mask");
 
     Model blocks = m["blocks"];
@@ -327,7 +334,8 @@ inline SwinResult swin_transformer(Model m, Tensor x, SwinParams const& p) {
         auto layer = m["layers"][i];
         r = swin_layer(layer, r.x_down, r.w_down, r.h_down, p.layers[i], p.window_size);
 
-        Tensor out = layer_norm(layer["norm"], r.x_out);
+        TensorName norm_layer("norm{}", i);
+        Tensor out = layer_norm(m[norm_layer.c_str()], r.x_out);
         out = ggml_reshape_4d(m, out, p.layers[i].num_features, r.w_out, r.h_out, b);
         outs[i] = out;
     }
