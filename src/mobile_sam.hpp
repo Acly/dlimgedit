@@ -14,11 +14,11 @@ constexpr int mask_size = image_size / 4;
 
 // Common
 
-Tensor linear(Model m, Tensor x);
-Tensor conv_2d(Model m, Tensor x, int stride = 1, int pad = 0);
-Tensor depthwise_conv_2d(Model m, Tensor x, int stride = 1, int pad = 0);
-Tensor layer_norm(Model m, Tensor x, float eps = 1e-5f);
-Tensor batch_norm_2d(Model m, Tensor x);
+Tensor linear(ModelRef m, Tensor x);
+Tensor conv_2d(ModelRef m, Tensor x, int stride = 1, int pad = 0);
+Tensor depthwise_conv_2d(ModelRef m, Tensor x, int stride = 1, int pad = 0);
+Tensor layer_norm(ModelRef m, Tensor x, float eps = 1e-5f);
+Tensor batch_norm_2d(ModelRef m, Tensor x);
 
 // Image encoder
 
@@ -46,36 +46,36 @@ struct TinyViTParams {
     // clang-format on
 };
 
-Tensor tiny_vit(Model m, Tensor x, TinyViTParams const& p);
+Tensor tiny_vit(ModelRef m, Tensor x, TinyViTParams const& p);
 
 float resize_longest_side(Extent extent, int target_longest_side);
 std::vector<float> preprocess_image(ImageView image);
-Tensor conv_2d_batch_norm(Model m, Tensor x, int stride = 1, int pad = 0, int groups = 1);
-Tensor patch_embed(Model m, Tensor x);
-Tensor layer_norm_2d(Model m, Tensor x, float eps = 1e-6f);
-Tensor layer_norm_2d_channels(Model m, Tensor x, float eps = 1e-6f);
-Tensor mb_conv(Model m, Tensor x);
-Tensor patch_merging(Model m, Tensor x, int input_resolution);
-Tensor mlp(Model m, Tensor x);
-Tensor attention_rel_bias(Model m, Tensor x, int dim, int num_heads);
-Tensor window_partition(Model m, Tensor x, int window);
-Tensor window_reverse(Model m, Tensor x, int w, int h, int window);
-Tensor tiny_vit_block(Model m, Tensor x, int input_resolution, int dim, int num_heads,
+Tensor conv_2d_batch_norm(ModelRef m, Tensor x, int stride = 1, int pad = 0, int groups = 1);
+Tensor patch_embed(ModelRef m, Tensor x);
+Tensor layer_norm_2d(ModelRef m, Tensor x, float eps = 1e-6f);
+Tensor layer_norm_2d_channels(ModelRef m, Tensor x, float eps = 1e-6f);
+Tensor mb_conv(ModelRef m, Tensor x);
+Tensor patch_merging(ModelRef m, Tensor x, int input_resolution);
+Tensor mlp(ModelRef m, Tensor x);
+Tensor attention_rel_bias(ModelRef m, Tensor x, int dim, int num_heads);
+Tensor window_partition(ModelRef m, Tensor x, int window);
+Tensor window_reverse(ModelRef m, Tensor x, int w, int h, int window);
+Tensor tiny_vit_block(ModelRef m, Tensor x, int input_resolution, int dim, int num_heads,
                       int window_size);
-Tensor conv_layer(Model m, Tensor x, TinyViTParams::Layer p);
-Tensor basic_layer(Model m, Tensor x, TinyViTParams::Layer const& p);
+Tensor conv_layer(ModelRef m, Tensor x, TinyViTParams::Layer p);
+Tensor basic_layer(ModelRef m, Tensor x, TinyViTParams::Layer const& p);
 
 // Prompt encoder
 
 std::array<float, 4> preprocess_prompt(Point point, Extent input_image_extent);
 std::array<float, 4> preprocess_prompt(Region region, Extent input_image_extent);
 
-Tensor embed_points(Model m, Tensor coords);
-Tensor embed_box(Model m, Tensor coords);
-Tensor no_mask_embed(Model m, int embedding_size = 64);
+Tensor embed_points(ModelRef m, Tensor coords);
+Tensor embed_box(ModelRef m, Tensor coords);
+Tensor no_mask_embed(ModelRef m, int embedding_size = 64);
 
 float transform_coord(int p, float scale, int image_size = 1024);
-Tensor position_embedding_random(Model m, Tensor coords);
+Tensor position_embedding_random(ModelRef m, Tensor coords);
 
 // Mask decoder
 
@@ -84,20 +84,20 @@ struct MaskPrediction {
     Tensor iou;
 };
 
-MaskPrediction predict_masks(Model m, Tensor image_embeddings, Tensor sparse_prompt,
+MaskPrediction predict_masks(ModelRef m, Tensor image_embeddings, Tensor sparse_prompt,
                              Tensor dense_prompt);
 
-Tensor mlp_block(Model m, Tensor x);
-Tensor separate_attention_heads(Model m, Tensor x, int num_heads);
-Tensor attention(Model m, Tensor q, Tensor k, Tensor v, int num_heads);
-std::tuple<Tensor, Tensor> two_way_attention_block(Model m, Tensor queries, Tensor keys,
+Tensor mlp_block(ModelRef m, Tensor x);
+Tensor separate_attention_heads(ModelRef m, Tensor x, int num_heads);
+Tensor attention(ModelRef m, Tensor q, Tensor k, Tensor v, int num_heads);
+std::tuple<Tensor, Tensor> two_way_attention_block(ModelRef m, Tensor queries, Tensor keys,
                                                    Tensor query_pe, Tensor key_pe, int num_heads,
                                                    bool skip_first_layer_pe = false);
-std::tuple<Tensor, Tensor> two_way_transformer(Model m, Tensor image_embedding, Tensor image_pe,
+std::tuple<Tensor, Tensor> two_way_transformer(ModelRef m, Tensor image_embedding, Tensor image_pe,
                                                Tensor point_embedding, int depth, int num_heads);
-Tensor conv_transpose_2d(Model m, Tensor x, int stride);
-Tensor upscale_outputs(Model m, Tensor x);
-Tensor hypernetwork_mlp(Model m, Tensor x, int num_layers);
+Tensor conv_transpose_2d(ModelRef m, Tensor x, int stride);
+Tensor upscale_outputs(ModelRef m, Tensor x);
+Tensor hypernetwork_mlp(ModelRef m, Tensor x, int num_layers);
 Image postprocess_mask(std::span<float const> mask_data, Extent target_extent);
 
 } // namespace dlimg::sam

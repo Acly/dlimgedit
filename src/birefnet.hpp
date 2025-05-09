@@ -13,21 +13,31 @@ using sam::conv_2d;
 using sam::layer_norm;
 using sam::linear;
 
-template <typename T>
-struct TensorAlloc {
-    Tensor tensor;
-    std::unique_ptr<T[]> data;
+inline std::vector<float> preprocess_image(ImageView image, int image_size) {
+    constexpr float mean[] = {123.675f, 116.28f, 103.53f}; // 0.485, 0.456, 0.406
+    constexpr float std[] = {58.395f, 57.12f, 57.375f};    // 0.229, 0.224, 0.225
 
-    explicit TensorAlloc(Tensor tensor) : tensor(tensor) {
-        data = std::unique_ptr<T[]>(new T[ggml_nelements(tensor)]);
+    std::optional<Image> resized;
+    if (image.extent.width != image_size || image.extent.height != image_size) {
+        resized = resize(image, Extent(image_size, image_size));
+        image = ImageView(*resized);
     }
 
-    void copy_to_backend_buffer() const {
-        ggml_backend_tensor_set(tensor, data.get(), 0, ggml_nbytes(tensor));
+    auto input_pixel = PixelAccessor(image);
+    std::vector<float> result(3 * image_size * image_size);
+    for (int y = 0; y < image_size; ++y) {
+        for (int x = 0; x < image_size; ++x) {
+            for (int c = 0; c < 3; ++c) {
+                float value = float(input_pixel.get(image.pixels, x, y, c));
+                float normalized = (value - mean[c]) / std[c];
+                result[y * image_size * 3 + x * 3 + c] = normalized;
+            }
+        }
     }
-};
+    return result;
+}
 
-inline Tensor mlp(Model m, Tensor x) {
+inline Tensor mlp(ModelRef m, Tensor x) {
     x = linear(m["fc1"], x);
     x = ggml_gelu_inplace(m, x);
     x = linear(m["fc2"], x);
@@ -56,7 +66,7 @@ inline TensorAlloc<int32_t> create_relative_position_index(ggml_context* ctx, in
     return result;
 }
 
-inline Tensor window_partition(Model m, Tensor x, int window) {
+inline Tensor window_partition(ModelRef m, Tensor x, int window) {
     auto [c, w, h, b] = nelements(x);
     ASSERT(w % window == 0 && h % window == 0 && "Expecting padded input");
 
@@ -66,7 +76,7 @@ inline Tensor window_partition(Model m, Tensor x, int window) {
     return x;
 }
 
-inline Tensor window_reverse(Model m, Tensor x, int w, int h, int window) {
+inline Tensor window_reverse(ModelRef m, Tensor x, int w, int h, int window) {
     int64_t c = x->ne[0];
     int64_t b = x->ne[2] / (w / window) / (h / window);
     ASSERT(x->ne[2] % (w / window) == 0 && "Expecting ne[2] to be multiple of window count");
@@ -77,7 +87,7 @@ inline Tensor window_reverse(Model m, Tensor x, int w, int h, int window) {
     return x;
 }
 
-inline Tensor window_attention(Model m, Tensor x, Tensor mask, int num_heads, int window) {
+inline Tensor window_attention(ModelRef m, Tensor x, Tensor mask, int num_heads, int window) {
     auto [c, n, b, _] = nelements(x);
 
     Tensor qkv = linear(m["qkv"], x);
@@ -136,7 +146,7 @@ struct SwinBlockParams {
     int shift = 0;
 };
 
-inline Tensor swin_block(Model m, Tensor x, Tensor mask, SwinBlockParams const& p) {
+inline Tensor swin_block(ModelRef m, Tensor x, Tensor mask, SwinBlockParams const& p) {
     auto [c, n, b, _] = nelements(x);
     auto [num_heads, window, w, h, shift] = p;
     ASSERT(n == w * h && "Spatial dimensions do not match");
@@ -181,7 +191,7 @@ inline Tensor swin_block(Model m, Tensor x, Tensor mask, SwinBlockParams const& 
     return m.named(x);
 }
 
-inline Tensor patch_merging(Model m, Tensor x, int w, int h) {
+inline Tensor patch_merging(ModelRef m, Tensor x, int w, int h) {
     auto [c, n, b, _] = nelements(x);
     ASSERT(n == w * h && "Spatial dimensions do not match");
     ASSERT(w % 2 == 0 && h % 2 == 0 && "Expecting even spatial dimensions");
@@ -279,12 +289,12 @@ struct SwinLayerResult {
     int64_t h_down;
 };
 
-inline SwinLayerResult swin_layer(Model m, Tensor x, int64_t w, int64_t h, SwinLayer const& p,
+inline SwinLayerResult swin_layer(ModelRef m, Tensor x, int64_t w, int64_t h, SwinLayer const& p,
                                   int window_size) {
     // Attention masks need to be precomputed
     Tensor attn_mask = m.with_prefix(TensorName("swin_layer_{}x{}", w, h)).find("attn_mask");
 
-    Model blocks = m["blocks"];
+    ModelRef blocks = m["blocks"];
     for (int i = 0; i < p.depth; ++i) {
         SwinBlockParams b = {.num_heads = p.num_heads,
                              .window_size = window_size,
@@ -300,7 +310,7 @@ inline SwinLayerResult swin_layer(Model m, Tensor x, int64_t w, int64_t h, SwinL
     return {x, w, h, x, w, h};
 }
 
-inline Tensor patch_embed(Model m, Tensor x, int patch_size = 4) {
+inline Tensor patch_embed(ModelRef m, Tensor x, int patch_size = 4) {
     ASSERT(x->ne[1] % patch_size == 0 && x->ne[2] % patch_size == 0);
 
     x = conv_2d(m["proj"], x, patch_size);
@@ -321,7 +331,7 @@ struct SwinParams {
 
 using SwinResult = std::array<Tensor, SwinParams::num_layers>;
 
-inline SwinResult swin_transformer(Model m, Tensor x, SwinParams const& p) {
+inline SwinResult swin_transformer(ModelRef m, Tensor x, SwinParams const& p) {
     x = patch_embed(m["patch_embed"], x, 4);
 
     auto [c, w, h, b] = nelements(x);
@@ -366,18 +376,18 @@ constexpr SwinParams swin_l_params = {
 
 // clang-format on
 
-inline Tensor downscale_by(Model m, Tensor x, int f) {
+inline Tensor downscale_by(ModelRef m, Tensor x, int f) {
     auto [c, w, h, b] = nelements(x);
     ASSERT(w % f == 0 && h % f == 0 && "Expecting even spatial dimensions");
     return ggml_view_4d(m, x, c, w / f, h / f, b, x->nb[1] * f, x->nb[2] * f, x->nb[3], 0);
 }
 
-inline Tensor upscale_to(Model m, Tensor x, Tensor target) {
+inline Tensor upscale_to(ModelRef m, Tensor x, Tensor target) {
     return ggml_upscale_ext(
         m, x, x->ne[0], target->ne[1], target->ne[2], x->ne[3], GGML_SCALE_MODE_BILINEAR);
 }
 
-inline SwinResult encode(Model m, Tensor x, SwinParams const& p) {
+inline SwinResult encode(ModelRef m, Tensor x, SwinParams const& p) {
     auto [c, w, h, b] = nelements(x);
 
     auto xs = swin_transformer(m["bb"], x, p);

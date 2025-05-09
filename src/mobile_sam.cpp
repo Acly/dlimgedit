@@ -6,7 +6,7 @@
 
 namespace dlimg::sam {
 
-Tensor linear(Model m, Tensor x) {
+Tensor linear(ModelRef m, Tensor x) {
     x = ggml_mul_mat(m, m.weights("weight"), x);
     if (Tensor bias = m.find("bias")) {
         x = ggml_add_inplace(m, x, bias);
@@ -14,7 +14,7 @@ Tensor linear(Model m, Tensor x) {
     return x;
 }
 
-Tensor conv_2d(Model m, Tensor x, int stride, int pad) {
+Tensor conv_2d(ModelRef m, Tensor x, int stride, int pad) {
     Tensor weight = m.weights("weight");
     if (weight->ne[1] == 1 && weight->ne[2] == 1 && stride == 1) {
         int64_t w = x->ne[1];
@@ -47,7 +47,7 @@ Tensor conv_2d(Model m, Tensor x, int stride, int pad) {
     return x;
 }
 
-Tensor depthwise_conv_2d(Model m, Tensor x, int stride, int pad) {
+Tensor depthwise_conv_2d(ModelRef m, Tensor x, int stride, int pad) {
     Tensor weight = ggml_permute(m, m.weights("weight"), 3, 2, 0, 1);
     x = ggml_permute(m, x, 2, 0, 1, 3);
     x = ggml_conv_2d_dw_direct(m, weight, x, stride, stride, pad, pad, 1, 1);
@@ -55,7 +55,7 @@ Tensor depthwise_conv_2d(Model m, Tensor x, int stride, int pad) {
     return x;
 }
 
-Tensor conv_transpose_2d(Model m, Tensor x, int stride) {
+Tensor conv_transpose_2d(ModelRef m, Tensor x, int stride) {
     Tensor weight = m.weights("weight");
     if (m.backend == GGMLBackend::cpu) {
         // TODO: ggml_conv_transpose_2d_p0 expects fp16 weights
@@ -76,14 +76,14 @@ Tensor conv_transpose_2d(Model m, Tensor x, int stride) {
     return x;
 }
 
-Tensor layer_norm(Model m, Tensor x, float eps) {
+Tensor layer_norm(ModelRef m, Tensor x, float eps) {
     x = ggml_norm(m, x, eps);
     x = ggml_mul_inplace(m, x, m.weights("weight"));
     x = ggml_add_inplace(m, x, m.weights("bias"));
     return m.named(x);
 }
 
-Tensor batch_norm_2d(Model m, Tensor x) {
+Tensor batch_norm_2d(ModelRef m, Tensor x) {
     Tensor var = m.weights("running_var"); // = sqrt(var + eps)
     Tensor mean = m.weights("running_mean");
     Tensor weight = m.weights("weight");
@@ -99,7 +99,7 @@ Tensor batch_norm_2d(Model m, Tensor x) {
     return m.named(x);
 }
 
-Tensor window_partition(Model m, Tensor x, int window) {
+Tensor window_partition(ModelRef m, Tensor x, int window) {
     int64_t c = x->ne[0];
     int64_t b = x->ne[3];
     if (m.backend == GGMLBackend::cpu) {
@@ -121,7 +121,7 @@ Tensor window_partition(Model m, Tensor x, int window) {
     return x;
 }
 
-Tensor window_reverse(Model m, Tensor x, int w, int h, int window) {
+Tensor window_reverse(ModelRef m, Tensor x, int w, int h, int window) {
     int64_t c = x->ne[0];
     int64_t b = x->ne[3];
     if (m.backend == GGMLBackend::cpu) {
@@ -183,7 +183,7 @@ std::vector<float> preprocess_image(ImageView image) {
     return result;
 }
 
-Tensor conv_2d_batch_norm(Model m, Tensor x, int stride, int pad, int groups) {
+Tensor conv_2d_batch_norm(ModelRef m, Tensor x, int stride, int pad, int groups) {
     if (groups == 1) {
         x = conv_2d(m["c"], x, stride, pad);
     } else {
@@ -193,14 +193,14 @@ Tensor conv_2d_batch_norm(Model m, Tensor x, int stride, int pad, int groups) {
     return m.named(x);
 }
 
-Tensor patch_embed(Model m, Tensor x) {
+Tensor patch_embed(ModelRef m, Tensor x) {
     x = conv_2d_batch_norm(m["seq.0"], x, 2, 1);
     x = ggml_gelu_inplace(m, x);
     x = conv_2d_batch_norm(m["seq.2"], x, 2, 1);
     return m.named(x);
 }
 
-Tensor mb_conv(Model m, Tensor x) {
+Tensor mb_conv(ModelRef m, Tensor x) {
     Tensor shortcut = x;
 
     x = conv_2d_batch_norm(m["conv1"], x);
@@ -216,7 +216,7 @@ Tensor mb_conv(Model m, Tensor x) {
     return m.named(x);
 }
 
-Tensor patch_merging(Model m, Tensor x, int input_resolution) {
+Tensor patch_merging(ModelRef m, Tensor x, int input_resolution) {
     if (x->ne[2] == 1) {
         x = ggml_reshape_4d(m, x, x->ne[0], input_resolution, input_resolution, x->ne[3]);
     }
@@ -233,7 +233,7 @@ Tensor patch_merging(Model m, Tensor x, int input_resolution) {
     return m.named(x);
 }
 
-Tensor mlp(Model m, Tensor x) {
+Tensor mlp(ModelRef m, Tensor x) {
     x = layer_norm(m["norm"], x);
 
     x = linear(m["fc1"], x);
@@ -242,7 +242,7 @@ Tensor mlp(Model m, Tensor x) {
     return m.named(x);
 }
 
-Tensor attention_rel_bias(Model m, Tensor x, int dim, int num_heads) {
+Tensor attention_rel_bias(ModelRef m, Tensor x, int dim, int num_heads) {
     GGML_ASSERT(dim % num_heads == 0);
     int key_dim = dim / num_heads;
     int b = x->ne[2];
@@ -256,7 +256,7 @@ Tensor attention_rel_bias(Model m, Tensor x, int dim, int num_heads) {
 
     // split([key_dim, key_dim, key_dim], dim=3)
     size_t offset = qkv->nb[3];
-    auto split = [=](Model m, Tensor tensor, size_t index) {
+    auto split = [=](ModelRef m, Tensor tensor, size_t index) {
         tensor = ggml_view_3d(
             m, tensor, key_dim, num_heads * n, b, tensor->nb[1], tensor->nb[2], index * offset);
         tensor = ggml_reshape_4d(m, tensor, key_dim, num_heads, n, b);
@@ -283,7 +283,7 @@ Tensor attention_rel_bias(Model m, Tensor x, int dim, int num_heads) {
     return m.named(x);
 }
 
-Tensor tiny_vit_block(Model m, Tensor x, int input_resolution, int dim, int num_heads,
+Tensor tiny_vit_block(ModelRef m, Tensor x, int input_resolution, int dim, int num_heads,
                       int window_size) {
     int h = input_resolution;
     int w = input_resolution;
@@ -310,7 +310,7 @@ Tensor tiny_vit_block(Model m, Tensor x, int input_resolution, int dim, int num_
     return m.named(x);
 }
 
-Tensor conv_layer(Model m, Tensor x, TinyViTParams::Layer p) {
+Tensor conv_layer(ModelRef m, Tensor x, TinyViTParams::Layer p) {
     auto block = m["blocks"];
     for (int i = 0; i < p.depth; ++i) {
         x = mb_conv(block[i], x);
@@ -319,7 +319,7 @@ Tensor conv_layer(Model m, Tensor x, TinyViTParams::Layer p) {
     return m.named(x);
 }
 
-Tensor basic_layer(Model m, Tensor x, TinyViTParams::Layer const& p) {
+Tensor basic_layer(ModelRef m, Tensor x, TinyViTParams::Layer const& p) {
     auto blocks = m["blocks"];
     for (int i = 0; i < p.depth; ++i) {
         x = tiny_vit_block(blocks[i], x, p.resolution, p.embed_dim, p.num_heads, p.window_size);
@@ -330,7 +330,7 @@ Tensor basic_layer(Model m, Tensor x, TinyViTParams::Layer const& p) {
     return m.named(x);
 }
 
-Tensor tiny_vit(Model m, Tensor x, TinyViTParams const& p) {
+Tensor tiny_vit(ModelRef m, Tensor x, TinyViTParams const& p) {
     x = patch_embed(m["patch_embed"], x);
     x = conv_layer(m["layers.0"], x, p.layers[0]);
 
@@ -376,7 +376,7 @@ std::array<float, 4> preprocess_prompt(Region region, Extent input_image_extent)
     return std::array{x0, y0, x1, y1};
 }
 
-Tensor position_embedding_random(Model m, Tensor coords) {
+Tensor position_embedding_random(ModelRef m, Tensor coords) {
     constexpr float pi = 3.14159265358979323846f;
 
     Tensor pe = m.weights("positional_encoding_gaussian_matrix");
@@ -388,7 +388,7 @@ Tensor position_embedding_random(Model m, Tensor coords) {
     return ggml_concat(m, coords_sin, coords_cos, 0);
 }
 
-Tensor embed_points(Model m, Tensor coords) {
+Tensor embed_points(ModelRef m, Tensor coords) {
     int64_t count = coords->ne[1] - 1; // last element is sentinel
     Tensor x = position_embedding_random(m["pe_layer"], coords);
 
@@ -406,7 +406,7 @@ Tensor embed_points(Model m, Tensor coords) {
     return x;
 }
 
-Tensor embed_box(Model m, Tensor coords) {
+Tensor embed_box(ModelRef m, Tensor coords) {
     // Handles a box defined by two points
     coords = ggml_reshape_3d(m, coords, 2, 2, 1);
     Tensor x = position_embedding_random(m["pe_layer"], coords);
@@ -423,26 +423,26 @@ Tensor embed_box(Model m, Tensor coords) {
     return x;
 }
 
-Tensor no_mask_embed(Model m, int) { return m.weights("no_mask_embed.weight"); }
+Tensor no_mask_embed(ModelRef m, int) { return m.weights("no_mask_embed.weight"); }
 
 //
 // Mask Decoder
 //
 
-Tensor mlp_block(Model m, Tensor x) {
+Tensor mlp_block(ModelRef m, Tensor x) {
     x = linear(m["lin1"], x);
     x = ggml_relu_inplace(m, x);
     x = linear(m["lin2"], x);
     return x;
 }
 
-Tensor separate_attention_heads(Model m, Tensor x, int num_heads) {
+Tensor separate_attention_heads(ModelRef m, Tensor x, int num_heads) {
     x = ggml_reshape_4d(m, x, x->ne[0] / num_heads, num_heads, x->ne[1], x->ne[2]);
     x = ggml_cont(m, ggml_permute(m, x, 0, 2, 1, 3));
     return x;
 }
 
-Tensor attention(Model m, Tensor q, Tensor k, Tensor v, int num_heads) {
+Tensor attention(ModelRef m, Tensor q, Tensor k, Tensor v, int num_heads) {
     q = linear(m["q_proj"], q);
     k = linear(m["k_proj"], k);
     v = linear(m["v_proj"], v);
@@ -463,8 +463,8 @@ Tensor attention(Model m, Tensor q, Tensor k, Tensor v, int num_heads) {
     return out;
 }
 
-auto two_way_attention_block(Model m, Tensor queries, Tensor keys, Tensor query_pe, Tensor key_pe,
-                             int num_heads, bool skip_first_layer_pe)
+auto two_way_attention_block(ModelRef m, Tensor queries, Tensor keys, Tensor query_pe,
+                             Tensor key_pe, int num_heads, bool skip_first_layer_pe)
     -> std::tuple<Tensor, Tensor> {
     // Self attention block
     if (skip_first_layer_pe) {
@@ -501,8 +501,9 @@ auto two_way_attention_block(Model m, Tensor queries, Tensor keys, Tensor query_
     return {queries, keys};
 }
 
-auto two_way_transformer(Model m, Tensor image_embedding, Tensor image_pe, Tensor point_embedding,
-                         int depth, int num_heads) -> std::tuple<Tensor, Tensor> {
+auto two_way_transformer(ModelRef m, Tensor image_embedding, Tensor image_pe,
+                         Tensor point_embedding, int depth, int num_heads)
+    -> std::tuple<Tensor, Tensor> {
     auto [c, w, h, b] = nelements(image_embedding);
     image_embedding = ggml_reshape_3d(m, image_embedding, c, w * h, b);
     image_pe = ggml_reshape_3d(m, image_pe, c, w * h, b);
@@ -511,7 +512,7 @@ auto two_way_transformer(Model m, Tensor image_embedding, Tensor image_pe, Tenso
     Tensor keys = image_embedding;
 
     // Apply transformer blocks and final layer norm
-    Model layers = m["layers"];
+    ModelRef layers = m["layers"];
     for (int i = 0; i < depth; ++i) {
         bool skip_first_layer_pe = i == 0;
         std::tie(queries, keys) = two_way_attention_block(
@@ -528,7 +529,7 @@ auto two_way_transformer(Model m, Tensor image_embedding, Tensor image_pe, Tenso
     return {queries, keys};
 }
 
-Tensor layer_norm_2d(Model m, Tensor x, float eps) {
+Tensor layer_norm_2d(ModelRef m, Tensor x, float eps) {
     x = ggml_norm(m, x, eps);
     x = ggml_mul_inplace(m, x, m.weights("weight"));
     x = ggml_add_inplace(m, x, m.weights("bias"));
@@ -536,7 +537,7 @@ Tensor layer_norm_2d(Model m, Tensor x, float eps) {
     return x;
 }
 
-Tensor upscale_outputs(Model m, Tensor x) {
+Tensor upscale_outputs(ModelRef m, Tensor x) {
     x = conv_transpose_2d(m[0], x, 2);
     x = layer_norm_2d(m[1], x);
     x = ggml_gelu_inplace(m, x);
@@ -545,8 +546,8 @@ Tensor upscale_outputs(Model m, Tensor x) {
     return x;
 }
 
-Tensor hypernetwork_mlp(Model m, Tensor x, int num_layers) {
-    Model layers = m["layers"];
+Tensor hypernetwork_mlp(ModelRef m, Tensor x, int num_layers) {
+    ModelRef layers = m["layers"];
     for (int i = 0; i < num_layers; ++i) {
         x = linear(layers[i], x);
         if (i < num_layers - 1) {
@@ -556,13 +557,13 @@ Tensor hypernetwork_mlp(Model m, Tensor x, int num_layers) {
     return x;
 }
 
-Tensor slice_2d(Model m, Tensor x, int index, int dim) {
+Tensor slice_2d(ModelRef m, Tensor x, int index, int dim) {
     GGML_ASSERT(dim == 1);
     size_t offset = index * x->nb[dim];
     return ggml_view_2d(m, x, x->ne[0], x->ne[2], x->nb[dim], offset);
 }
 
-MaskPrediction predict_masks(Model m, Tensor image_embeddings, Tensor sparse_prompt,
+MaskPrediction predict_masks(ModelRef m, Tensor image_embeddings, Tensor sparse_prompt,
                              Tensor dense_prompt) {
     const int num_heads = 8;
     const int transformer_depth = 2;
@@ -603,7 +604,7 @@ MaskPrediction predict_masks(Model m, Tensor image_embeddings, Tensor sparse_pro
     auto [c, w, h, b2] = nelements(upscaled_embedding);
     upscaled_embedding = ggml_reshape_3d(m, upscaled_embedding, c, w * h, b);
 
-    Model mlps = m["output_hypernetworks_mlps"];
+    ModelRef mlps = m["output_hypernetworks_mlps"];
     int64_t transformer_out_dim = mlps.weights("3.layers.2.weight")->ne[1];
     Tensor hyper_in = ggml_new_tensor_3d(
         m, GGML_TYPE_F32, transformer_out_dim, num_mask_tokens, mask_tokens_out->ne[2]);
