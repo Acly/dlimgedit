@@ -376,34 +376,50 @@ constexpr SwinParams swin_l_params = {
 
 // clang-format on
 
-inline Tensor downscale_by(ModelRef m, Tensor x, int f) {
-    auto [c, w, h, b] = nelements(x);
-    ASSERT(w % f == 0 && h % f == 0 && "Expecting even spatial dimensions");
-    return ggml_view_4d(m, x, c, w / f, h / f, b, x->nb[1] * f, x->nb[2] * f, x->nb[3], 0);
-}
-
 inline Tensor upscale_to(ModelRef m, Tensor x, Tensor target) {
     return ggml_upscale_ext(
-        m, x, x->ne[0], target->ne[1], target->ne[2], x->ne[3], GGML_SCALE_MODE_BILINEAR);
+        m, x, target->ne[0], target->ne[1], x->ne[2], x->ne[3], GGML_SCALE_MODE_BILINEAR);
+}
+
+inline Tensor downscale_by(ModelRef m, Tensor x, int f) {
+    return ggml_upscale_ext(
+        m, x, x->ne[0] / f, x->ne[1] / f, x->ne[2], x->ne[3], GGML_SCALE_MODE_BILINEAR);
+}
+
+inline SwinResult encode_concat(ModelRef m, SwinResult& xs, SwinResult& xs_low) {
+    // TODO: implement CWHN upscale/interpolate which allows downscale & align_corners=True
+    // CWHN -> WHCN
+    for (int i = 0; i < 4; ++i) {
+        xs[i] = ggml_cont(m,  ggml_permute(m, xs[i], 2, 0, 1, 3));
+        xs_low[i] = ggml_cont(m,  ggml_permute(m, xs_low[i], 2, 0, 1, 3));
+    }
+
+    xs[0] = ggml_concat(m, xs[0], upscale_to(m, xs_low[0], xs[0]), 2);
+    xs[1] = ggml_concat(m, xs[1], upscale_to(m, xs_low[1], xs[1]), 2);
+    xs[2] = ggml_concat(m, xs[2], upscale_to(m, xs_low[2], xs[2]), 2);
+    xs[3] = ggml_concat(m, xs[3], upscale_to(m, xs_low[3], xs[3]), 2);
+
+    Tensor x3 = downscale_by(m, xs[0], 8);
+    x3 = ggml_concat(m, x3, downscale_by(m, xs[1], 4), 2);
+    x3 = ggml_concat(m, x3, downscale_by(m, xs[2], 2), 2);
+    xs[3] = ggml_concat(m, x3, xs[3], 2);
+
+    // WHCN -> CWHN
+    for (int i = 0; i < 4; ++i) {
+        xs[i] = ggml_cont(m, ggml_permute(m, xs[i], 1, 2, 0, 3));
+    }
+    return xs;
 }
 
 inline SwinResult encode(ModelRef m, Tensor x, SwinParams const& p) {
     auto [c, w, h, b] = nelements(x);
 
     auto xs = swin_transformer(m["bb"], x, p);
-    auto x_low = ggml_cont(m, downscale_by(m, x, 2));
+    Tensor x_low = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3));
+    x_low = downscale_by(m, x_low, 2);
+    x_low = ggml_cont(m, ggml_permute(m, x_low, 1, 2, 0, 3));
     auto xs_low = swin_transformer(m["bb"], x_low, p);
-
-    xs[0] = ggml_concat(m, xs[0], upscale_to(m, xs_low[0], xs[0]), 0);
-    xs[1] = ggml_concat(m, xs[1], upscale_to(m, xs_low[1], xs[1]), 0);
-    xs[2] = ggml_concat(m, xs[2], upscale_to(m, xs_low[2], xs[2]), 0);
-    xs[3] = ggml_concat(m, xs[3], upscale_to(m, xs_low[3], xs[3]), 0);
-
-    Tensor x3 = downscale_by(m, xs[0], 8);
-    x3 = ggml_concat(m, x3, downscale_by(m, xs[1], 4), 0);
-    x3 = ggml_concat(m, x3, downscale_by(m, xs[2], 2), 0);
-    xs[3] = ggml_concat(m, x3, xs[3], 0);
-
+    encode_concat(m, xs, xs_low);
     return xs;
 }
 

@@ -1,3 +1,4 @@
+#include "birefnet.hpp"
 #include "image.hpp"
 #include "mobile_sam.hpp"
 #include <dlimgedit/dlimgedit.hpp>
@@ -29,7 +30,11 @@ void print_tensor(Tensor t) {
     for (int c = 0; c < std::min(4i64, t->ne[2]); ++c) {
         for (int y = 0; y < std::min(6i64, t->ne[1]); ++y) {
             for (int x = 0; x < std::min(6i64, t->ne[0]); ++x) {
-                fmt::print("{:6.3f} ", data[c * t->nb[2] / 4 + y * t->nb[1] / 4 + x]);
+                int xi = x < 3 ? x : t->ne[0] - 6 + x;
+                if (x == 3) {
+                    fmt::print(" ... ");
+                }
+                fmt::print("{:6.3f} ", data[c * t->nb[2] / 4 + y * t->nb[1] / 4 + xi]);
             }
             fmt::print("\n");
         }
@@ -93,7 +98,7 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
     auto image_data = sam::preprocess_image(input_image);
 
     Backend_ backend = Backend_::init(backend_kind);
-    Model model = Model::load_gguf(model_path, backend);
+    Model model = Model::load(model_path, backend);
 
     auto time_load = std::chrono::steady_clock::now();
 
@@ -115,7 +120,7 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
         ggml_build_forward_expand(embed_graph.graph, image_embeddings);
 
         embed_graph.allocate();
-        embed_graph.set_input(x, std::span(image_data));
+        set_tensor_data(x, image_data);
 
         embed_graph.compute(backend);
 
@@ -161,10 +166,10 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
         ggml_build_forward_expand(m.graph, iou);
 
         decode_graph.allocate();
-        decode_graph.set_input(image_embeddings, std::span(image_embeddings_data));
+        set_tensor_data(image_embeddings, image_embeddings_data);
 
         auto points = sam::preprocess_prompt(region, input_image.extent());
-        decode_graph.set_input(point_coords, std::span(points));
+        set_tensor_data(point_coords, points);
 
         decode_graph.compute(backend);
 
@@ -193,6 +198,62 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
     fmt::print("Save: {}ms\n",
                std::chrono::duration_cast<std::chrono::milliseconds>(time_save - time_mask_decode)
                    .count());
+}
+
+void run_birefnet(Path const& model_path, Path const& input_path, Path const& output_path,
+                  GGMLBackend backend_kind) {
+    auto time = std::chrono::steady_clock::now();
+    auto input_path_str = input_path.string();
+    auto input_image = Image::load(input_path_str.c_str());
+    auto image_data = birefnet::preprocess_image(input_image, 1024);
+
+    Backend_ backend = Backend_::init(backend_kind);
+    Model model = Model::load(model_path, backend, 6);
+
+    birefnet::SwinParams params = birefnet::swin_l_params;
+    {
+        ModelRef m = ModelRef(model);
+        auto rel_pos_index = birefnet::create_relative_position_index(m, params.window_size);
+        auto attn_masks = std::array{
+            birefnet::create_attention_mask(m, 256, 256, params.window_size),
+            birefnet::create_attention_mask(m, 128, 128, params.window_size),
+            birefnet::create_attention_mask(m, 64, 64, params.window_size),
+            birefnet::create_attention_mask(m, 32, 32, params.window_size),
+            birefnet::create_attention_mask(m, 16, 16, params.window_size)};
+
+        model.allocate();
+        rel_pos_index.copy_to_backend_buffer();
+        for (auto&& attn_mask : attn_masks) {
+            attn_mask.copy_to_backend_buffer();
+        }
+    }
+    {
+        Graph graph = Graph::create(backend, 4096);
+        ModelRef m = ModelRef(model, graph);
+
+        Tensor x = ggml_new_tensor_4d(m, GGML_TYPE_F32, 3, 1024, 1024, 1);
+        ggml_set_name(x, "input");
+        ggml_set_input(x);
+        
+        auto result = birefnet::encode(m, x, params);
+
+        for (int i = 0; i < result.size(); ++i) {
+            ggml_set_name(result[i], fmt::format("output_{}", i).c_str());
+            ggml_set_output(result[i]);
+            ggml_build_forward_expand(graph.graph, result[i]);
+        }
+
+        graph.allocate();
+        set_tensor_data(x, image_data);
+        graph.compute(backend);
+
+        std::vector<float> embeds[4];
+        for (int i = 0; i < result.size(); ++i) {
+            // embeds[i].resize(ggml_nelements(result[i]));
+            // ggml_backend_tensor_get(result[i], embeds[i].data(), 0, ggml_nbytes(result[i]));
+            print_tensor(result[i]);
+        }
+    }
 }
 
 struct ggml_tensor* ggml_conv_2d_dw_f32(struct ggml_context* ctx, struct ggml_tensor* a,
@@ -526,6 +587,9 @@ int main(int argc, char** argv) {
         dlimg::test_conv_2d(argv[2]);
     } else if (arg1 == "conv_transpose_2d") {
         dlimg::test_conv_transpose_2d(argv[2]);
+    } else if (arg1 == "birefnet") {
+        dlimg::run_birefnet("script/.ggml/birefnet.gguf", "test/input/cat_and_hat.png",
+                            "test/result/birefnet_ggml", dlimg::GGMLBackend::cpu);
     } else if (arg1 == "vulkan") {
         dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
                              dlimg::Region{dlimg::Point{180, 110}, dlimg::Extent{325, 220}},

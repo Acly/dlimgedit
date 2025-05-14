@@ -104,9 +104,8 @@ def generate_state(state_dict: dict[str, torch.Tensor]):
 
 def randomize(state_dict: dict[str, torch.Tensor]):
     return {
-        k: torch.rand_like(v)
+        k: torch.rand_like(v) if v.dtype.is_floating_point else v
         for k, v in state_dict.items()
-        if v.dtype.is_floating_point
     }
 
 

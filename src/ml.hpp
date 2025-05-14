@@ -53,10 +53,12 @@ using gguf_context_ptr = std::unique_ptr<gguf_context, gguf_context_deleter>;
 
 struct Model {
     ggml_context_ptr context;
-    ggml_backend_buffer_ptr buffer;
-    GGMLBackend backend = GGMLBackend::cpu;
+    ggml_backend_t backend;
+    GGMLBackend backend_kind = GGMLBackend::cpu;
+    ggml_backend_buffer_ptr weights_buffer;
+    std::vector<ggml_backend_buffer_ptr> extra_buffers;
 
-    static Model load_gguf(Path const& filepath, Backend_ const& backend) {
+    static Model load(Path const& filepath, Backend_ const& backend, int n_extra_tensors = 0) {
         ggml_context* data_ctx;
         gguf_init_params params;
         params.no_alloc = false;
@@ -68,9 +70,10 @@ struct Model {
             throw std::runtime_error("Failed to load GGUF model");
         }
         ggml_context_ptr data_ctx_ptr(data_ctx);
+        int64_t n_weights = gguf_get_n_tensors(gguf_ctx.get());
 
         ggml_init_params model_ctx_params{};
-        model_ctx_params.mem_size = gguf_get_n_tensors(gguf_ctx.get()) * ggml_tensor_overhead();
+        model_ctx_params.mem_size = (n_weights + n_extra_tensors) * ggml_tensor_overhead();
         model_ctx_params.no_alloc = true;
         ggml_context_ptr model_ctx(ggml_init(model_ctx_params));
 
@@ -88,7 +91,16 @@ struct Model {
             auto data_tensor = ggml_get_tensor(data_ctx, ggml_get_name(t));
             ggml_backend_tensor_set(t, ggml_get_data(data_tensor), 0, ggml_nbytes(data_tensor));
         }
-        return Model{std::move(model_ctx), std::move(buffer), backend.kind};
+        return Model{std::move(model_ctx), backend, backend.kind, std::move(buffer), {}};
+    }
+
+    bool allocate() {
+        ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(context.get(), backend));
+        if (!buffer) {
+            return false; // context contains nothing to allocate
+        }
+        extra_buffers.push_back(std::move(buffer));
+        return true;
     }
 };
 
@@ -103,7 +115,7 @@ struct Graph {
         graph_ctx_params.no_alloc = true;
         ggml_context* ctx = ggml_init(graph_ctx_params);
         ggml_context_ptr ctx_ptr(ctx);
-        ggml_cgraph* graph = ggml_new_graph(ctx);
+        ggml_cgraph* graph = ggml_new_graph_custom(ctx, size, false);
 
         ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
         return Graph{std::move(ctx_ptr), graph, ggml_gallocr_ptr(allocr)};
@@ -114,12 +126,6 @@ struct Graph {
         if (!result) {
             throw std::runtime_error("Failed to allocate buffer for graph");
         }
-    }
-
-    template <typename T, size_t N = std::dynamic_extent>
-    void set_input(Tensor tensor, std::span<T, N> data) {
-        ASSERT(ggml_nbytes(tensor) == data.size_bytes());
-        ggml_backend_tensor_set(tensor, data.data(), 0, ggml_nbytes(tensor));
     }
 
     void compute(Backend_ const& backend) const { ggml_backend_graph_compute(backend, graph); }
@@ -134,11 +140,17 @@ struct ModelRef {
 
     ModelRef() = default;
 
+    ModelRef(Model& m)
+        : weights_context(m.context.get()),
+          graph_context(m.context.get()),
+          graph(nullptr),
+          backend(m.backend_kind) {}
+
     ModelRef(Model& m, Graph& g)
         : weights_context(m.context.get()),
           graph_context(g.context.get()),
           graph(g.graph),
-          backend(m.backend) {}
+          backend(m.backend_kind) {}
 
     explicit ModelRef(ggml_context* weights_context, ggml_context* graph_context = nullptr,
                       ggml_cgraph* graph = nullptr, TensorName prefix = {},
@@ -207,6 +219,11 @@ struct ModelRef {
 
     operator ggml_context*() { return graph_context; }
 };
+
+void set_tensor_data(Tensor tensor, std::span<float> data) {
+    ASSERT(ggml_nbytes(tensor) == data.size_bytes());
+    ggml_backend_tensor_set(tensor, data.data(), 0, ggml_nbytes(tensor));
+}
 
 template <typename T>
 struct TensorAlloc {

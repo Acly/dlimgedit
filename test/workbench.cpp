@@ -308,6 +308,16 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             w.output(result[1], inputs[input_count - 3]);
             w.output(result[2], inputs[input_count - 2]);
             w.output(result[3], inputs[input_count - 1]);
+        } else if (name == "biref_encode") {
+            birefnet::SwinResult xs, xs_low;
+            for (int i = 0; i < 4; ++i) {
+                xs[i] = m.find(TensorName("input{}", i).c_str());
+                xs_low[i] = m.find(TensorName("input_low{}", i).c_str());
+            }
+            birefnet::encode_concat(m, xs, xs_low);
+            for (int i = 0; i < 4; ++i) {
+                w.output(xs[i], inputs[input_count - 4 + i]);
+            }
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }

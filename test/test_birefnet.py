@@ -11,7 +11,7 @@ from . import workbench
 from .workbench import to_channel_last, revert_channel_last, convert_to_channel_last
 from .workbench import input_tensor, generate_state
 
-torch.set_printoptions(precision=2, linewidth=200, edgeitems=8)
+torch.set_printoptions(precision=3, linewidth=200, edgeitems=8, sci_mode=False)
 
 
 class WindowAttention(nn.Module):
@@ -718,11 +718,11 @@ def test_swin_transformer():
     swin_transformer = SwinTransformer(
         embed_dim=8, depths=[2, 2, 2, 2], num_heads=[2, 2, 4, 2], window_size=3
     )
-    state = generate_state(swin_transformer.state_dict())
+    state = workbench.randomize(swin_transformer.state_dict())
     swin_transformer.load_state_dict(state)
     swin_transformer.eval()
 
-    x = input_tensor(1, 3, w, h)
+    x = torch.rand(1, 3, w, h)
     expected = swin_transformer(x)
 
     x = to_channel_last(x)
@@ -739,3 +739,65 @@ def test_swin_transformer():
         result[i] = revert_channel_last(result[i])
         # workbench.print_results(result[i], e)
         assert torch.allclose(result[i], e, atol=1e-3)
+
+
+def _interpolate(x, target_size):
+    return F.interpolate(x, size=target_size, mode="bilinear", align_corners=True)
+
+def _downscale(x, target_size):
+    return F.interpolate(x, size=target_size, mode="bilinear", align_corners=True)
+
+
+def forward_enc(x: Tensor, xs: list[Tensor], xs_low: list[Tensor]):
+    # x1, x2, x3, x4 = self.bb(x)
+    x1, x2, x3, x4 = xs
+    # cat
+    B, C, H, W = x.shape
+    # x1_, x2_, x3_, x4_ = self.bb(F.interpolate(x, size=(H//2, W//2), mode='bilinear', align_corners=True))
+    x1_, x2_, x3_, x4_ = xs_low
+    x1 = torch.cat([x1, _interpolate(x1_, x1.shape[2:])], dim=1)
+    x2 = torch.cat([x2, _interpolate(x2_, x2.shape[2:])], dim=1)
+    x3 = torch.cat([x3, _interpolate(x3_, x3.shape[2:])], dim=1)
+    x4 = torch.cat([x4, _interpolate(x4_, x4.shape[2:])], dim=1)
+
+    to_concatenate = (
+        *[
+            _downscale(x1, x4.shape[2:]),
+            _downscale(x2, x4.shape[2:]),
+            _downscale(x3, x4.shape[2:]),
+        ][-3:],
+        x4,
+    )
+    x4 = torch.cat(to_concatenate, dim=1)
+    return (x1, x2, x3, x4)
+
+
+def test_encode():
+    x = input_tensor(1, 3, 32, 32)
+    xs = [
+        input_tensor(1, 4, 16, 16),
+        input_tensor(1, 8, 8, 8),
+        input_tensor(1, 16, 4, 4),
+        input_tensor(1, 32, 2, 2),
+    ]
+    xs_low = [
+        input_tensor(1, 4, 8, 8),
+        input_tensor(1, 8, 4, 4),
+        input_tensor(1, 16, 2, 2),
+        input_tensor(1, 32, 1, 1),
+    ]
+    expected = forward_enc(x, xs, xs_low)
+
+    state = {}
+    state.update({f"input{i}": to_channel_last(xs[i]) for i in range(4)})
+    state.update({f"input_low{i}": to_channel_last(xs_low[i]) for i in range(4)})
+    state.update(
+        {f"output{i}": to_channel_last(torch.zeros_like(expected[i])) for i in range(4)}
+    )
+
+    workbench.invoke_test("biref_encode", x, expected[0], state)
+
+    for i, e in enumerate(expected):
+        result = revert_channel_last( state[f"output{i}"])
+        # workbench.print_results(result, e)
+        assert torch.allclose(result, e)
