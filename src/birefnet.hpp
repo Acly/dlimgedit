@@ -9,6 +9,7 @@
 
 namespace dlimg::birefnet {
 
+using sam::batch_norm_2d;
 using sam::conv_2d;
 using sam::layer_norm;
 using sam::linear;
@@ -377,21 +378,21 @@ constexpr SwinParams swin_l_params = {
 // clang-format on
 
 inline Tensor upscale_to(ModelRef m, Tensor x, Tensor target) {
-    return ggml_upscale_ext(
-        m, x, target->ne[0], target->ne[1], x->ne[2], x->ne[3], GGML_SCALE_MODE_BILINEAR);
+    return ggml_upscale_ext(m, x, target->ne[0], target->ne[1], x->ne[2], x->ne[3],
+                            GGML_SCALE_MODE_BILINEAR | GGML_SCALE_ALIGN_CORNERS);
 }
 
 inline Tensor downscale_by(ModelRef m, Tensor x, int f) {
-    return ggml_upscale_ext(
-        m, x, x->ne[0] / f, x->ne[1] / f, x->ne[2], x->ne[3], GGML_SCALE_MODE_BILINEAR);
+    return ggml_upscale_ext(m, x, x->ne[0] / f, x->ne[1] / f, x->ne[2], x->ne[3],
+                            GGML_SCALE_MODE_BILINEAR | GGML_SCALE_ALIGN_CORNERS);
 }
 
 inline SwinResult encode_concat(ModelRef m, SwinResult& xs, SwinResult& xs_low) {
-    // TODO: implement CWHN upscale/interpolate which allows downscale & align_corners=True
-    // CWHN -> WHCN
+    // TODO: implement cwhn upscale/interpolate which allows downscale & align_corners=True
+    // cwhn -> whcn
     for (int i = 0; i < 4; ++i) {
-        xs[i] = ggml_cont(m,  ggml_permute(m, xs[i], 2, 0, 1, 3));
-        xs_low[i] = ggml_cont(m,  ggml_permute(m, xs_low[i], 2, 0, 1, 3));
+        xs[i] = ggml_cont(m, ggml_permute(m, xs[i], 2, 0, 1, 3));
+        xs_low[i] = ggml_cont(m, ggml_permute(m, xs_low[i], 2, 0, 1, 3));
     }
 
     xs[0] = ggml_concat(m, xs[0], upscale_to(m, xs_low[0], xs[0]), 2);
@@ -404,7 +405,7 @@ inline SwinResult encode_concat(ModelRef m, SwinResult& xs, SwinResult& xs_low) 
     x3 = ggml_concat(m, x3, downscale_by(m, xs[2], 2), 2);
     xs[3] = ggml_concat(m, x3, xs[3], 2);
 
-    // WHCN -> CWHN
+    // whcn -> cwhn
     for (int i = 0; i < 4; ++i) {
         xs[i] = ggml_cont(m, ggml_permute(m, xs[i], 1, 2, 0, 3));
     }
@@ -421,6 +422,94 @@ inline SwinResult encode(ModelRef m, Tensor x, SwinParams const& p) {
     auto xs_low = swin_transformer(m["bb"], x_low, p);
     encode_concat(m, xs, xs_low);
     return xs;
+}
+
+//
+// Decoder
+//
+
+inline Tensor conv_2d_deform(ModelRef m, Tensor x, Tensor weight, Tensor offset, Tensor mask,
+                             int stride, int pad) {
+    x = ggml_permute(m, x, 2, 0, 1, 3);           // cwhn -> whcn
+    weight = ggml_permute(m, weight, 2, 0, 1, 3); // cwho -> whco
+    offset = ggml_permute(m, offset, 2, 0, 1, 3); // cwhn -> whcn
+    if (mask) {
+        mask = ggml_permute(m, mask, 2, 0, 1, 3); // cwhn -> whcn
+    }
+    x = ggml_conv_2d_deform(m, weight, x, offset, mask, stride, stride, pad, pad);
+    x = ggml_permute(m, x, 1, 2, 0, 3); // whcn -> cwhn
+    return x;
+}
+
+inline Tensor deformable_conv_2d(ModelRef m, Tensor x, int stride = 1, int pad = 0) {
+    Tensor offset = conv_2d(m["offset"], x, stride, pad);
+    Tensor modulator = conv_2d(m["modulator"], x, stride, pad);
+    modulator = ggml_sigmoid_inplace(m, modulator);
+    modulator = ggml_scale_inplace(m, modulator, 2.0f);
+
+    x = conv_2d_deform(m, x, m.weights("conv.weight"), offset, modulator, stride, pad);
+    return m.named(x);
+}
+
+inline Tensor mean_2d(ModelRef m, Tensor x) {
+    auto [c, w, h, n] = nelements(x);
+    x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3)); // cwhn -> whcn
+    x = ggml_mean(m, x);
+    x = ggml_reshape_3d(m, x, h, c, n);
+    x = ggml_mean(m, x);
+    x = ggml_reshape_4d(m, x, c, 1, 1, n);
+    return x;
+}
+
+inline Tensor global_avg_pool(ModelRef m, Tensor x) {
+    x = mean_2d(m[0], x);
+    x = conv_2d(m[1], x);
+    x = batch_norm_2d(m[2], x);
+    x = ggml_relu_inplace(m, x);
+    return m.named(x);
+}
+
+inline Tensor aspp_module_deformable(ModelRef m, Tensor x, int padding = 0) {
+    x = deformable_conv_2d(m["atrous_conv"], x, 1, padding);
+    x = batch_norm_2d(m["bn"], x);
+    x = ggml_relu_inplace(m, x);
+    return m.named(x);
+}
+
+inline Tensor aspp_deformable(ModelRef m, Tensor x) {
+    const int kernel_sizes[] = {1, 3, 7};
+
+    Tensor x1 = aspp_module_deformable(m["aspp1"], x);
+    ModelRef aspp_deforms = m["aspp_deforms"];
+    Tensor x_deforms[3];
+    for (int i = 0; i < 3; ++i) {
+        int padding = kernel_sizes[i] / 2;
+        x_deforms[i] = aspp_module_deformable(aspp_deforms[i], x, padding);
+    }
+    Tensor x5 = global_avg_pool(m["global_avg_pool"], x);
+    x5 = ggml_reshape_4d(m, x5, 1, 1, x5->ne[0], x5->ne[3]);
+    x5 = ggml_upscale_ext(m, x5, x1->ne[1], x1->ne[2], x5->ne[2], x5->ne[3],
+                          GGML_SCALE_MODE_BILINEAR | GGML_SCALE_ALIGN_CORNERS);
+    x5 = ggml_cont(m, ggml_permute(m, x5, 1, 2, 0, 3)); // whcn -> cwhn
+    x = ggml_concat(m, x1, x_deforms[0], 0);
+    x = ggml_concat(m, x, x_deforms[1], 0);
+    x = ggml_concat(m, x, x_deforms[2], 0);
+    x = ggml_concat(m, x, x5, 0);
+
+    x = conv_2d(m["conv1"], x);
+    x = batch_norm_2d(m["bn1"], x);
+    x = ggml_relu_inplace(m, x);
+    return m.named(x);
+}
+
+inline Tensor basic_dec_blk(ModelRef m, Tensor x) {
+    x = conv_2d(m["conv_in"], x, 1, 1);
+    x = batch_norm_2d(m["bn_in"], x);
+    x = ggml_relu_inplace(m, x);
+    x = aspp_deformable(m["dec_att"], x);
+    x = conv_2d(m["conv_out"], x, 1, 1);
+    x = batch_norm_2d(m["bn_out"], x);
+    return m.named(x);
 }
 
 } // namespace dlimg::birefnet

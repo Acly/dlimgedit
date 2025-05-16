@@ -70,7 +70,7 @@ def test_conv_2d_channels(scenario: str, backend: str):
     )
 
     x = to_channel_last(x)
-    args["weight"] = kernel.permute(0, 2, 3, 1)
+    args["weight"] = to_channel_last(kernel)
 
     result = to_channel_last(torch.zeros_like(expected))
     workbench.invoke_test(f"conv_2d_channels_{scenario}", x, result, args, backend)

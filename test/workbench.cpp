@@ -98,7 +98,7 @@ struct Workbench {
         };
         int backend_count = m.backend == GGMLBackend::cpu ? 1 : 2;
         auto sched = ggml_backend_sched_new(
-            backends.data(), buffer_types, backend_count, ggml_graph_size(m.graph), false);
+            backends.data(), buffer_types, backend_count, ggml_graph_size(m.graph), false, false);
 
         ggml_backend_sched_graph_compute(sched, m.graph);
 
@@ -158,6 +158,11 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             w.output(ggml_conv_transpose_2d_p0(m, m.weights("weight"), input, 1), output);
         } else if (name.starts_with("conv_transpose_2d")) {
             w.output(conv_transpose_2d(m, input, 1), output);
+        } else if (name == "conv_2d_deform") {
+            Tensor weight = m.weights("weight");
+            Tensor offset = m.weights("offset");
+            Tensor mask = m.find("mask");
+            w.output(birefnet::conv_2d_deform(m, input, weight, offset, mask, 1, 1), output);
         } else if (name == "batch_norm_2d") {
             w.output(batch_norm_2d(m, input), output);
         } else if (name == "roll_(0, 2, -1, 0)") {
@@ -318,6 +323,14 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             for (int i = 0; i < 4; ++i) {
                 w.output(xs[i], inputs[input_count - 4 + i]);
             }
+        } else if (name == "biref_deformable_conv_2d") {
+            w.output(birefnet::deformable_conv_2d(m, input, 1, 1), output);     
+        } else if (name == "biref_global_avg_pool") {
+            w.output(birefnet::global_avg_pool(m, input), output);
+        } else if (name == "biref_aspp_deformable") {
+            w.output(birefnet::aspp_deformable(m, input), output);
+        } else if (name == "biref_basic_dec_blk") {
+            w.output(birefnet::basic_dec_blk(m, input), output);
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }

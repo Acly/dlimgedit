@@ -117,9 +117,9 @@ def revert_channel_last(tensor: torch.Tensor):
     return tensor.permute(0, 3, 1, 2).contiguous()
 
 
-def convert_to_channel_last(state: dict[str, torch.Tensor], key="c.weight"):
+def convert_to_channel_last(state: dict[str, torch.Tensor], key="c."):
     for k, v in state.items():
-        if k.endswith(key):
+        if key in k and k.endswith(".weight"):
             if v.shape[1] == 1:  # depthwise
                 state[k] = v.permute(2, 3, 1, 0).contiguous()
             else:

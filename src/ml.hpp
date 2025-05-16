@@ -46,11 +46,6 @@ struct Backend_ {
     operator ggml_backend_t() const { return handle.get(); }
 };
 
-struct gguf_context_deleter {
-    void operator()(gguf_context* ctx) { gguf_free(ctx); }
-};
-using gguf_context_ptr = std::unique_ptr<gguf_context, gguf_context_deleter>;
-
 struct Model {
     ggml_context_ptr context;
     ggml_backend_t backend;

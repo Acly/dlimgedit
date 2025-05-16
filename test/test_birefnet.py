@@ -1,6 +1,5 @@
-import itertools
 import torch
-import numpy as np
+import torchvision
 import math
 import pytest
 from torch import Tensor, nn
@@ -138,7 +137,6 @@ def test_window_attention(masking: bool):
     result = torch.zeros_like(expected)
     result = workbench.invoke_test("biref_window_attention", x, result, state)
 
-    workbench.print_results(result, expected)
     assert torch.allclose(result, expected)
 
 
@@ -315,7 +313,6 @@ def test_swin_block():
     result = torch.zeros_like(expected)
     result = workbench.invoke_test("biref_swin_block", x, result, state)
 
-    workbench.print_results(result, expected)
     assert torch.allclose(result, expected, atol=1e-2)  # fp16 GELU
 
 
@@ -362,7 +359,6 @@ def test_patch_merging():
     result = torch.zeros_like(expected)
     result = workbench.invoke_test("biref_patch_merging", x, result, state)
 
-    workbench.print_results(result, expected)
     assert torch.allclose(result, expected)
 
 
@@ -530,7 +526,7 @@ def test_swin_layer():
     result = torch.zeros_like(expected)
     result = workbench.invoke_test("biref_swin_layer", x, result, state)
 
-    workbench.print_results(result, expected)
+    # workbench.print_results(result, expected)
     assert torch.allclose(result, expected)
 
 
@@ -580,7 +576,7 @@ def test_patch_embed():
     x = input_tensor(1, 3, 8, 12)
     expected = patch_embed(x)
 
-    state = convert_to_channel_last(state, key="proj.weight")
+    state = convert_to_channel_last(state, key="proj")
     x = to_channel_last(x)
     result = to_channel_last(torch.zeros_like(expected))
     result = workbench.invoke_test("biref_patch_embed", x, result, state)
@@ -726,7 +722,7 @@ def test_swin_transformer():
     expected = swin_transformer(x)
 
     x = to_channel_last(x)
-    state = convert_to_channel_last(state, key="patch_embed.proj.weight")
+    state = convert_to_channel_last(state, key="patch_embed.proj")
 
     result = [to_channel_last(torch.zeros_like(e)) for e in expected]
     state["result1"] = result[1]
@@ -743,6 +739,7 @@ def test_swin_transformer():
 
 def _interpolate(x, target_size):
     return F.interpolate(x, size=target_size, mode="bilinear", align_corners=True)
+
 
 def _downscale(x, target_size):
     return F.interpolate(x, size=target_size, mode="bilinear", align_corners=True)
@@ -798,6 +795,307 @@ def test_encode():
     workbench.invoke_test("biref_encode", x, expected[0], state)
 
     for i, e in enumerate(expected):
-        result = revert_channel_last( state[f"output{i}"])
+        result = revert_channel_last(state[f"output{i}"])
         # workbench.print_results(result, e)
         assert torch.allclose(result, e)
+
+
+#
+#
+# Decoder
+#
+
+
+def test_conv_2d_deform():
+    scenario = "large"
+    w, h, c_in, c_out, k = {
+        "small": (4, 4, 5, 2, 3),
+        "large": (42, 38, 82, 32, 3),
+    }[scenario]
+    x = input_tensor(1, c_in, h, w)
+    weight = input_tensor(c_out, c_in, k, k)
+    offset = 1.0 - input_tensor(1, 2 * k * k, h, w)
+    mask = torch.rand(1, k * k, h, w)
+    mask = torch.minimum(mask * 2.0, torch.tensor(1.0))
+    expected = torchvision.ops.deform_conv2d(
+        x, offset, weight, mask=mask, padding=(1, 1)
+    )
+
+    x = to_channel_last(x)
+    state = {
+        "weight": to_channel_last(weight),
+        "offset": to_channel_last(offset),
+        "mask": to_channel_last(mask),
+    }
+    result = to_channel_last(torch.zeros_like(expected))
+    result = workbench.invoke_test("conv_2d_deform", x, result, state)
+    result = revert_channel_last(result)
+
+    # workbench.print_results(result, expected)
+    assert torch.allclose(result, expected)
+
+
+class DeformableConv2d(nn.Module):
+    def __init__(
+        self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False
+    ):
+
+        super(DeformableConv2d, self).__init__()
+
+        assert type(kernel_size) is tuple or type(kernel_size) is int
+
+        kernel_size = (
+            kernel_size if type(kernel_size) is tuple else (kernel_size, kernel_size)
+        )
+        self.stride = stride if type(stride) is tuple else (stride, stride)
+        self.padding = padding
+
+        self.offset_conv = nn.Conv2d(
+            in_channels,
+            2 * kernel_size[0] * kernel_size[1],
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=self.padding,
+            bias=True,
+        )
+
+        nn.init.constant_(self.offset_conv.weight, 0.0)
+        nn.init.constant_(self.offset_conv.bias, 0.0)
+
+        self.modulator_conv = nn.Conv2d(
+            in_channels,
+            1 * kernel_size[0] * kernel_size[1],
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=self.padding,
+            bias=True,
+        )
+
+        nn.init.constant_(self.modulator_conv.weight, 0.0)
+        nn.init.constant_(self.modulator_conv.bias, 0.0)
+
+        self.regular_conv = nn.Conv2d(
+            in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=self.padding,
+            bias=bias,
+        )
+
+    def forward(self, x):
+        # h, w = x.shape[2:]
+        # max_offset = max(h, w)/4.
+
+        offset = self.offset_conv(x)  # .clamp(-max_offset, max_offset)
+        modulator = 2.0 * torch.sigmoid(self.modulator_conv(x))
+
+        x = torchvision.ops.deform_conv2d(
+            input=x,
+            offset=offset,
+            weight=self.regular_conv.weight,
+            bias=self.regular_conv.bias,
+            padding=self.padding,
+            mask=modulator,
+            stride=self.stride,
+        )
+        return x
+
+
+def shorten_weight_name(name: str):
+    return (
+        name.replace("offset_conv", "offset")
+        .replace("modulator_conv", "modulator")
+        .replace("regular_conv", "conv")
+    )
+
+
+def test_deformable_conv_2d():
+    conv = DeformableConv2d(3, 2, kernel_size=3, stride=1, padding=1)
+    state = generate_state(conv.state_dict())
+    conv.load_state_dict(state)
+    conv.eval()
+    x = input_tensor(1, 3, 4, 4)
+    expected = conv(x)
+
+    state = convert_to_channel_last(state, key="conv")
+    state = {shorten_weight_name(k): v for k, v in state.items()}
+    x = to_channel_last(x)
+    result = to_channel_last(torch.zeros_like(expected))
+    result = workbench.invoke_test("biref_deformable_conv_2d", x, result, state)
+    result = revert_channel_last(result)
+
+    workbench.print_results(result, expected)
+    assert torch.allclose(result, expected)
+
+
+class GlobalAvgPool(nn.Sequential):
+    def __init__(self, in_channels):
+        super().__init__()
+        self.append(nn.AdaptiveAvgPool2d((1, 1)))
+        self.append(nn.Conv2d(in_channels, in_channels, 1, stride=1, bias=False))
+        self.append(nn.BatchNorm2d(in_channels))
+        self.append(nn.ReLU(inplace=True))
+
+
+def add_variance_epsilon(state: dict[str, torch.Tensor], epsilon=1e-5):
+    for k in state:
+        if k.endswith("running_var"):
+            state[k] = torch.sqrt(state[k] + 1e-5).contiguous()
+    return {k: v for k, v in state.items() if "num_batches_tracked" not in k}
+
+
+def test_global_avg_pool():
+    pool = GlobalAvgPool(3)
+    state = generate_state(pool.state_dict())
+    pool.load_state_dict(state)
+    pool.eval()
+    x = input_tensor(1, 3, 4, 4)
+    expected = pool(x)
+
+    state = add_variance_epsilon(state)
+    state = convert_to_channel_last(state, key="1.weight")
+    x = to_channel_last(x)
+    result = to_channel_last(torch.zeros_like(expected))
+    result = workbench.invoke_test("biref_global_avg_pool", x, result, state)
+    result = revert_channel_last(result)
+
+    assert torch.allclose(result, expected)
+
+
+class _ASPPModuleDeformable(nn.Module):
+    def __init__(self, in_channels, planes, kernel_size, padding):
+        super(_ASPPModuleDeformable, self).__init__()
+        self.atrous_conv = DeformableConv2d(
+            in_channels,
+            planes,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=padding,
+            bias=False,
+        )
+        self.bn = nn.BatchNorm2d(planes)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        x = self.atrous_conv(x)
+        x = self.bn(x)
+
+        return self.relu(x)
+
+
+class ASPPDeformable(nn.Module):
+    def __init__(self, in_channels, out_channels=None, parallel_block_sizes=[1, 3, 7]):
+        super(ASPPDeformable, self).__init__()
+        self.down_scale = 1
+        if out_channels is None:
+            out_channels = in_channels
+        self.in_channelster = 256 // self.down_scale
+
+        self.aspp1 = _ASPPModuleDeformable(
+            in_channels, self.in_channelster, 1, padding=0
+        )
+        self.aspp_deforms = nn.ModuleList(
+            [
+                _ASPPModuleDeformable(
+                    in_channels,
+                    self.in_channelster,
+                    conv_size,
+                    padding=int(conv_size // 2),
+                )
+                for conv_size in parallel_block_sizes
+            ]
+        )
+
+        self.global_avg_pool = nn.Sequential(
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Conv2d(in_channels, self.in_channelster, 1, stride=1, bias=False),
+            nn.BatchNorm2d(self.in_channelster),
+            nn.ReLU(inplace=True),
+        )
+        self.conv1 = nn.Conv2d(
+            self.in_channelster * (2 + len(self.aspp_deforms)),
+            out_channels,
+            1,
+            bias=False,
+        )
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.dropout = nn.Dropout(0.5)
+
+    def forward(self, x):
+        x1 = self.aspp1(x)
+        x_aspp_deforms = [aspp_deform(x) for aspp_deform in self.aspp_deforms]
+        x5 = self.global_avg_pool(x)
+        x5 = F.interpolate(x5, size=x1.size()[2:], mode="bilinear", align_corners=True)
+        x = torch.cat((x1, *x_aspp_deforms, x5), dim=1)
+
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+
+        return self.dropout(x)
+
+
+def test_aspp_deformable():
+    aspp = ASPPDeformable(3, 2)
+    state = workbench.randomize(aspp.state_dict())
+    aspp.load_state_dict(state)
+    aspp.eval()
+    x = input_tensor(1, 3, 16, 16)
+    expected = aspp(x)
+
+    state = add_variance_epsilon(state)
+    state = convert_to_channel_last(state, key="conv")
+    state = convert_to_channel_last(state, key="pool.1")
+    state = {shorten_weight_name(k): v for k, v in state.items()}
+    x = to_channel_last(x)
+
+    result = to_channel_last(torch.zeros_like(expected))
+    result = workbench.invoke_test("biref_aspp_deformable", x, result, state)
+    result = revert_channel_last(result)
+
+    assert torch.allclose(result, expected)
+
+
+class BasicDecBlk(nn.Module):
+    def __init__(self, in_channels=64, out_channels=64, inter_channels=64):
+        super(BasicDecBlk, self).__init__()
+        # inter_channels = in_channels // 4 if config.dec_channels_inter == 'adap' else 64
+        self.conv_in = nn.Conv2d(in_channels, inter_channels, 3, 1, padding=1)
+        self.relu_in = nn.ReLU(inplace=True)
+        self.dec_att = ASPPDeformable(in_channels=inter_channels)
+        self.conv_out = nn.Conv2d(inter_channels, out_channels, 3, 1, padding=1)
+        self.bn_in = nn.BatchNorm2d(inter_channels)
+        self.bn_out = nn.BatchNorm2d(out_channels)
+
+    def forward(self, x):
+        x = self.conv_in(x)
+        x = self.bn_in(x)
+        x = self.relu_in(x)
+        if hasattr(self, "dec_att"):
+            x = self.dec_att(x)
+        x = self.conv_out(x)
+        x = self.bn_out(x)
+        return x
+
+
+def test_basic_dec_blk():
+    block = BasicDecBlk(8, 5)
+    state = workbench.randomize(block.state_dict())
+    block.load_state_dict(state)
+    block.eval()
+    x = input_tensor(1, 8, 12, 16)
+    expected = block(x)
+
+    state = add_variance_epsilon(state)
+    state = convert_to_channel_last(state, key="conv")
+    state = convert_to_channel_last(state, key="pool.1")
+    state = {shorten_weight_name(k): v for k, v in state.items()}
+    x = to_channel_last(x)
+
+    result = to_channel_last(torch.zeros_like(expected))
+    result = workbench.invoke_test("biref_basic_dec_blk", x, result, state)
+    result = revert_channel_last(result)
+
+    assert torch.allclose(result, expected)

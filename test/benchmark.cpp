@@ -234,7 +234,7 @@ void run_birefnet(Path const& model_path, Path const& input_path, Path const& ou
         Tensor x = ggml_new_tensor_4d(m, GGML_TYPE_F32, 3, 1024, 1024, 1);
         ggml_set_name(x, "input");
         ggml_set_input(x);
-        
+
         auto result = birefnet::encode(m, x, params);
 
         for (int i = 0; i < result.size(); ++i) {
@@ -453,7 +453,8 @@ void test_conv_2d(std::string_view method) {
 
     ggml_backend_buffer_type_t buffer_types[] = {ggml_backend_get_default_buffer_type(backends[0]),
                                                  ggml_backend_get_default_buffer_type(backends[1])};
-    auto sched = ggml_backend_sched_new(backends, buffer_types, 2, ggml_graph_size(graph), false);
+    auto sched = ggml_backend_sched_new(
+        backends, buffer_types, 2, ggml_graph_size(graph), false, false);
 
     // warm-up
     ggml_backend_sched_graph_compute(sched, graph);
