@@ -377,14 +377,29 @@ constexpr SwinParams swin_l_params = {
 
 // clang-format on
 
-inline Tensor upscale_to(ModelRef m, Tensor x, Tensor target) {
+inline Tensor upscale_to_whcn(ModelRef m, Tensor x, Tensor target) {
     return ggml_upscale_ext(m, x, target->ne[0], target->ne[1], x->ne[2], x->ne[3],
                             GGML_SCALE_MODE_BILINEAR | GGML_SCALE_ALIGN_CORNERS);
 }
 
-inline Tensor downscale_by(ModelRef m, Tensor x, int f) {
+inline Tensor upscale_to(ModelRef m, Tensor x, Tensor target) {
+    x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3)); // cwhn -> whcn
+    x = ggml_upscale_ext(m, x, target->ne[1], target->ne[2], x->ne[2], x->ne[3],
+                            GGML_SCALE_MODE_BILINEAR | GGML_SCALE_ALIGN_CORNERS);
+    x = ggml_cont(m, ggml_permute(m, x, 1, 2, 0, 3)); // whcn -> cwhn
+    return x;
+}
+
+inline Tensor downscale_by_whcn(ModelRef m, Tensor x, int f) {
     return ggml_upscale_ext(m, x, x->ne[0] / f, x->ne[1] / f, x->ne[2], x->ne[3],
                             GGML_SCALE_MODE_BILINEAR | GGML_SCALE_ALIGN_CORNERS);
+}
+
+inline Tensor downscale_by(ModelRef m, Tensor x, int f) {
+    x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3)); // cwhn -> whcn
+    x = downscale_by_whcn(m, x, f);
+    x = ggml_cont(m, ggml_permute(m, x, 1, 2, 0, 3)); // whcn -> cwhn
+    return x;
 }
 
 inline SwinResult encode_concat(ModelRef m, SwinResult& xs, SwinResult& xs_low) {
@@ -395,14 +410,14 @@ inline SwinResult encode_concat(ModelRef m, SwinResult& xs, SwinResult& xs_low) 
         xs_low[i] = ggml_cont(m, ggml_permute(m, xs_low[i], 2, 0, 1, 3));
     }
 
-    xs[0] = ggml_concat(m, xs[0], upscale_to(m, xs_low[0], xs[0]), 2);
-    xs[1] = ggml_concat(m, xs[1], upscale_to(m, xs_low[1], xs[1]), 2);
-    xs[2] = ggml_concat(m, xs[2], upscale_to(m, xs_low[2], xs[2]), 2);
-    xs[3] = ggml_concat(m, xs[3], upscale_to(m, xs_low[3], xs[3]), 2);
+    xs[0] = ggml_concat(m, xs[0], upscale_to_whcn(m, xs_low[0], xs[0]), 2);
+    xs[1] = ggml_concat(m, xs[1], upscale_to_whcn(m, xs_low[1], xs[1]), 2);
+    xs[2] = ggml_concat(m, xs[2], upscale_to_whcn(m, xs_low[2], xs[2]), 2);
+    xs[3] = ggml_concat(m, xs[3], upscale_to_whcn(m, xs_low[3], xs[3]), 2);
 
-    Tensor x3 = downscale_by(m, xs[0], 8);
-    x3 = ggml_concat(m, x3, downscale_by(m, xs[1], 4), 2);
-    x3 = ggml_concat(m, x3, downscale_by(m, xs[2], 2), 2);
+    Tensor x3 = downscale_by_whcn(m, xs[0], 8);
+    x3 = ggml_concat(m, x3, downscale_by_whcn(m, xs[1], 4), 2);
+    x3 = ggml_concat(m, x3, downscale_by_whcn(m, xs[2], 2), 2);
     xs[3] = ggml_concat(m, x3, xs[3], 2);
 
     // whcn -> cwhn
@@ -416,9 +431,7 @@ inline SwinResult encode(ModelRef m, Tensor x, SwinParams const& p) {
     auto [c, w, h, b] = nelements(x);
 
     auto xs = swin_transformer(m["bb"], x, p);
-    Tensor x_low = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3));
-    x_low = downscale_by(m, x_low, 2);
-    x_low = ggml_cont(m, ggml_permute(m, x_low, 1, 2, 0, 3));
+    auto x_low = downscale_by(m, x, 2);
     auto xs_low = swin_transformer(m["bb"], x_low, p);
     encode_concat(m, xs, xs_low);
     return xs;
@@ -470,7 +483,7 @@ inline Tensor global_avg_pool(ModelRef m, Tensor x) {
 }
 
 inline Tensor aspp_module_deformable(ModelRef m, Tensor x, int padding = 0) {
-    x = deformable_conv_2d(m["atrous_conv"], x, 1, padding);
+    x = deformable_conv_2d(m["conv"], x, 1, padding);
     x = batch_norm_2d(m["bn"], x);
     x = ggml_relu_inplace(m, x);
     return m.named(x);
@@ -502,7 +515,7 @@ inline Tensor aspp_deformable(ModelRef m, Tensor x) {
     return m.named(x);
 }
 
-inline Tensor basic_dec_blk(ModelRef m, Tensor x) {
+inline Tensor basic_decoder_block(ModelRef m, Tensor x) {
     x = conv_2d(m["conv_in"], x, 1, 1);
     x = batch_norm_2d(m["bn_in"], x);
     x = ggml_relu_inplace(m, x);
@@ -510,6 +523,116 @@ inline Tensor basic_dec_blk(ModelRef m, Tensor x) {
     x = conv_2d(m["conv_out"], x, 1, 1);
     x = batch_norm_2d(m["bn_out"], x);
     return m.named(x);
+}
+
+inline Tensor simple_conv(ModelRef m, Tensor x) {
+    x = conv_2d(m["conv1"], x, 1, 1);
+    x = conv_2d(m["conv_out"], x, 1, 1);
+    return m.named(x);
+}
+
+inline Tensor image_to_patches(ModelRef m, Tensor x, int out_w, int out_h) {
+    auto [w, h, c, b] = nelements(x);
+    ASSERT(w % out_w == 0 && h % out_h == 0 && "Grid must divide image size");
+    int grid_w = w / out_w;
+    int grid_h = h / out_h;
+    x = ggml_reshape_4d(m, x, out_w, grid_w, out_h, grid_h * c * b);
+    x = ggml_cont(m, ggml_permute(m, x, 0, 2, 1, 3));
+    x = ggml_reshape_4d(m, x, out_w, out_h, grid_w * grid_h * c, b);
+    return x;
+}
+
+inline Tensor gdt_conv(ModelRef m, Tensor x) {
+    x = conv_2d(m[0], x, 1, 1);
+    x = batch_norm_2d(m[1], x);
+    x = ggml_relu_inplace(m, x);
+    return x;
+}
+
+inline Tensor decode(ModelRef m, Tensor x, SwinResult const& features) {
+    Tensor x1 = features[0];
+    Tensor x2 = features[1];
+    Tensor x3 = features[2];
+    Tensor x4 = features[3];
+    Tensor x_whcn = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3)); // cwhn -> whcn
+
+    {
+        Tensor patches = image_to_patches(m, x_whcn, x4->ne[1], x4->ne[2]);
+        patches = ggml_cont(m, ggml_permute(m, patches, 1, 2, 0, 3)); // whcn -> cwhn
+        patches = simple_conv(m["ipt_blk5"], patches);
+        x4 = ggml_concat(m, x4, patches, 0);
+    }
+    Tensor p4 = basic_decoder_block(m["block4"], x4);
+    Tensor p4_gdt = gdt_conv(m["gdt_convs_4"], p4);
+    Tensor gdt_attn_4 = conv_2d(m["gdt_convs_attn_4.0"], p4_gdt);
+    gdt_attn_4 = ggml_sigmoid(m, gdt_attn_4);
+    p4 = ggml_mul(m, p4, gdt_attn_4);
+
+    x3 = conv_2d(m["lateral_block4.conv"], x3);
+    Tensor _p4 = upscale_to(m, p4, x3);
+    Tensor _p3 = ggml_add_inplace(m, _p4, x3);
+
+    {
+        Tensor patches = image_to_patches(m, x_whcn, _p3->ne[1], _p3->ne[2]);
+        patches = ggml_cont(m, ggml_permute(m, patches, 1, 2, 0, 3)); // whcn -> cwhn
+        patches = simple_conv(m["ipt_blk4"], patches);
+        _p3 = ggml_concat(m, _p3, patches, 0);
+    }
+    Tensor p3 = basic_decoder_block(m["block3"], _p3);
+    Tensor p3_gdt = gdt_conv(m["gdt_convs_3"], p3);
+    Tensor gdt_attn_3 = conv_2d(m["gdt_convs_attn_3.0"], p3_gdt);
+    gdt_attn_3 = ggml_sigmoid(m, gdt_attn_3);
+    p3 = ggml_mul(m, p3, gdt_attn_3);
+
+    _p3 = upscale_to(m, p3, x2);
+    x2 = conv_2d(m["lateral_block3.conv"], x2);
+    Tensor _p2 = ggml_add_inplace(m, _p3, x2);
+
+    {
+        Tensor patches = image_to_patches(m, x_whcn, _p2->ne[1], _p2->ne[2]);
+        patches = ggml_cont(m, ggml_permute(m, patches, 1, 2, 0, 3)); // whcn -> cwhn
+        patches = simple_conv(m["ipt_blk3"], patches);
+        _p2 = ggml_concat(m, _p2, patches, 0);
+    }
+    Tensor p2 = basic_decoder_block(m["block2"], _p2);
+    Tensor p2_gdt = gdt_conv(m["gdt_convs_2"], p2);
+    Tensor gdt_attn2 = conv_2d(m["gdt_convs_attn_2.0"], p2_gdt);
+    gdt_attn2 = ggml_sigmoid(m, gdt_attn2);
+    p2 = ggml_mul(m, p2, gdt_attn2);
+
+    _p2 = upscale_to(m, p2, x1);
+    x1 = conv_2d(m["lateral_block2.conv"], x1);
+    Tensor _p1 = ggml_add_inplace(m, _p2, x1);
+
+    {
+        Tensor patches = image_to_patches(m, x_whcn, _p1->ne[1], _p1->ne[2]);
+        patches = ggml_cont(m, ggml_permute(m, patches, 1, 2, 0, 3)); // whcn -> cwhn
+        patches = simple_conv(m["ipt_blk2"], patches);
+        _p1 = ggml_concat(m, _p1, patches, 0);
+    }
+    _p1 = basic_decoder_block(m["block1"], _p1);
+    _p1 = upscale_to(m, _p1, x);
+    // ... weird image_to_patches stuff even though _p1 is same size as x
+    Tensor p1_ipt = simple_conv(m["ipt_blk1"], x);
+    _p1 = ggml_concat(m, _p1, p1_ipt, 0);
+
+    Tensor p1_out = conv_2d(m["conv_out1.0"], _p1);
+    return m.named(p1_out);
+}
+
+//
+// 
+//
+
+inline Tensor run(ModelRef m, Tensor image, SwinParams const& encoder_params) {
+    // Encoder
+    SwinResult features = encode(m, image, encoder_params);
+    // Squeeze block
+    features[3] = basic_decoder_block(m["squeeze_module.0"], features[3]);
+    // Decoder
+    Tensor scaled_preds = decode(m["decoder"], image, features);
+
+    return scaled_preds;
 }
 
 } // namespace dlimg::birefnet

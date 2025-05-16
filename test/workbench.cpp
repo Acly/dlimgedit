@@ -330,7 +330,9 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
         } else if (name == "biref_aspp_deformable") {
             w.output(birefnet::aspp_deformable(m, input), output);
         } else if (name == "biref_basic_dec_blk") {
-            w.output(birefnet::basic_dec_blk(m, input), output);
+            w.output(birefnet::basic_decoder_block(m, input), output);
+        } else if (name == "biref_image_to_patches_2") {
+            w.output(birefnet::image_to_patches(m, input, 4, 4), output);
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }

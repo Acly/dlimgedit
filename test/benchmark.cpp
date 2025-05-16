@@ -228,31 +228,53 @@ void run_birefnet(Path const& model_path, Path const& input_path, Path const& ou
         }
     }
     {
-        Graph graph = Graph::create(backend, 4096);
+        Graph graph = Graph::create(backend, 6 * 1024);
         ModelRef m = ModelRef(model, graph);
 
         Tensor x = ggml_new_tensor_4d(m, GGML_TYPE_F32, 3, 1024, 1024, 1);
         ggml_set_name(x, "input");
         ggml_set_input(x);
 
-        auto result = birefnet::encode(m, x, params);
+        auto result = birefnet::run(m, x, params);
 
-        for (int i = 0; i < result.size(); ++i) {
-            ggml_set_name(result[i], fmt::format("output_{}", i).c_str());
-            ggml_set_output(result[i]);
-            ggml_build_forward_expand(graph.graph, result[i]);
-        }
+        ggml_set_name(result, "output");
+        ggml_set_output(result);
+        ggml_build_forward_expand(graph.graph, result);
 
         graph.allocate();
         set_tensor_data(x, image_data);
-        graph.compute(backend);
 
-        std::vector<float> embeds[4];
-        for (int i = 0; i < result.size(); ++i) {
-            // embeds[i].resize(ggml_nelements(result[i]));
-            // ggml_backend_tensor_get(result[i], embeds[i].data(), 0, ggml_nbytes(result[i]));
-            print_tensor(result[i]);
+        auto time = std::chrono::steady_clock::now();
+        graph.compute(backend);
+        fmt::print("Compute time: {}ms\n", std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::steady_clock::now() - time)
+                                               .count());
+
+        std::vector<float> output_data(ggml_nelements(result));
+        ggml_backend_tensor_get(result, output_data.data(), 0, ggml_nbytes(result));
+        Image output_image = Image({1024, 1024}, Channels::mask);
+        for (int i = 0; i < output_image.size(); ++i) {
+            output_image.pixels()[i] = uint8_t(std::clamp(output_data[i], 0.f, 1.f) * 255);
         }
+
+        Image output_mask = Image(input_image.extent(), Channels::mask);
+        resize_mask(output_image, input_image.extent(), output_mask.pixels());
+        std::string output_path_mask = fmt::format("{}_mask.png", output_path.string());
+        Image::save(output_mask, output_path_mask.c_str());
+        fmt::print("Saved to {}\n", output_path_mask);
+
+        Image output_image_rgba = Image(input_image.extent(), Channels::rgba);
+        uint8_t* rgba = output_image_rgba.pixels();
+        uint8_t const* input_rgb = input_image.pixels();
+        for (int i = 0; i < input_image.extent().width * input_image.extent().height; ++i) {
+            rgba[i * 4 + 0] = input_rgb[i * count(input_image.channels()) + 0];
+            rgba[i * 4 + 1] = input_rgb[i * count(input_image.channels()) + 1];
+            rgba[i * 4 + 2] = input_rgb[i * count(input_image.channels()) + 2];
+            rgba[i * 4 + 3] = output_mask.pixels()[i];
+        }
+        std::string output_path_rgba = fmt::format("{}_rgba.png", output_path.string());
+        Image::save(output_image_rgba, output_path_rgba.c_str());
+        fmt::print("Saved to {}\n", output_path_rgba);
     }
 }
 
@@ -581,24 +603,32 @@ void test_conv_transpose_2d(std::string_view method) {
 } // namespace dlimg
 
 int main(int argc, char** argv) {
-    auto arg1 = argc > 1 ? std::string_view(argv[1]) : std::string_view{};
-    if (arg1 == "depthwise_conv_2d") {
-        dlimg::test_depthwise_conv_2d(argv[2]);
-    } else if (arg1 == "conv_2d") {
-        dlimg::test_conv_2d(argv[2]);
-    } else if (arg1 == "conv_transpose_2d") {
-        dlimg::test_conv_transpose_2d(argv[2]);
-    } else if (arg1 == "birefnet") {
-        dlimg::run_birefnet("script/.ggml/birefnet.gguf", "test/input/cat_and_hat.png",
-                            "test/result/birefnet_ggml", dlimg::GGMLBackend::cpu);
-    } else if (arg1 == "vulkan") {
-        dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
-                             dlimg::Region{dlimg::Point{180, 110}, dlimg::Extent{325, 220}},
-                             "test/result/sam_ggml", dlimg::GGMLBackend::vulkan);
-    } else {
-        dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
-                             dlimg::Region{dlimg::Point{180, 110}, dlimg::Extent{325, 220}},
-                             "test/result/sam_ggml", dlimg::GGMLBackend::cpu);
+    try {
+        auto arg1 = argc > 1 ? std::string_view(argv[1]) : std::string_view{};
+        if (arg1 == "depthwise_conv_2d") {
+            dlimg::test_depthwise_conv_2d(argv[2]);
+        } else if (arg1 == "conv_2d") {
+            dlimg::test_conv_2d(argv[2]);
+        } else if (arg1 == "conv_transpose_2d") {
+            dlimg::test_conv_transpose_2d(argv[2]);
+        } else if (arg1 == "birefnet") {
+            dlimg::run_birefnet("script/.ggml/birefnet.gguf", "test/input/cat_and_hat.png",
+                                "test/result/birefnet_ggml", dlimg::GGMLBackend::cpu);
+        } else if (arg1 == "vulkan") {
+            dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
+                                 dlimg::Region{dlimg::Point{180, 110}, dlimg::Extent{325, 220}},
+                                 "test/result/sam_ggml", dlimg::GGMLBackend::vulkan);
+        } else {
+            dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
+                                 dlimg::Region{dlimg::Point{180, 110}, dlimg::Extent{325, 220}},
+                                 "test/result/sam_ggml", dlimg::GGMLBackend::cpu);
+        }
+    } catch (std::exception const& e) {
+        fmt::print(stderr, "Error: {}\n", e.what());
+        return 1;
+    } catch (...) {
+        fmt::print(stderr, "Unknown error\n");
+        return 1;
     }
     return 0;
 }

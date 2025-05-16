@@ -1,13 +1,10 @@
 # Convert BiRefNet model checkpoint to gguf format
 #
 
-import itertools
 import sys
 import torch
 import safetensors
-import numpy as np
 from pathlib import Path
-from torch import Tensor
 
 import gguf
 
@@ -33,8 +30,6 @@ writer.add_name("BiRefNet")
 window_size = 12  # swin-l: 12, swin-t: 7
 batch_norm_eps = 1e-5
 
-conv_2d_names = ["bb.patch_embed.proj.weight"]
-
 pbt = None
 
 for name in model.keys():
@@ -58,15 +53,20 @@ for name in model.keys():
         tensor = torch.sqrt(tensor + batch_norm_eps)
 
     # Conv2d: convert to NHWC format
-    if name in conv_2d_names:
-        assert tensor.shape[2] == tensor.shape[3] and tensor.shape[2] <= 4
+    is_conv = (
+        tensor.ndim == 4
+        and tensor.shape[2] == tensor.shape[3]
+        and tensor.shape[2] in (1, 3, 4, 7)
+        and name.endswith("weight")
+    )
+    if is_conv:
         tensor = conv_2d_kernel_to_nhwc(tensor)
 
     if tensor.dtype == torch.float16:
         tensor = tensor.to(torch.float32)
 
     tensor_data = tensor.numpy()
-    print(name, tensor.shape, tensor_data.dtype)
+    print("⇄" if is_conv else "○", name, tensor.shape, tensor_data.dtype)
     writer.add_tensor(name, tensor_data)
 
 writer.write_header_to_file()

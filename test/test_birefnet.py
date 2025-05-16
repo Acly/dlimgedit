@@ -5,6 +5,7 @@ import pytest
 from torch import Tensor, nn
 from torch.nn import functional as F
 from timm.layers import to_2tuple, trunc_normal_
+from einops import rearrange
 
 from . import workbench
 from .workbench import to_channel_last, revert_channel_last, convert_to_channel_last
@@ -907,6 +908,7 @@ def shorten_weight_name(name: str):
         name.replace("offset_conv", "offset")
         .replace("modulator_conv", "modulator")
         .replace("regular_conv", "conv")
+        .replace("atrous_conv", "conv")
     )
 
 
@@ -1098,4 +1100,20 @@ def test_basic_dec_blk():
     result = workbench.invoke_test("biref_basic_dec_blk", x, result, state)
     result = revert_channel_last(result)
 
+    assert torch.allclose(result, expected)
+
+
+def image2patches(image, grid_h, grid_w, transformation: str):
+    return rearrange(image, transformation, hg=grid_h, wg=grid_w)
+
+
+def test_image_to_patches():
+    transformation = "b c (hg h) (wg w) -> b (c hg wg) h w"
+    x = torch.arange(3 * 8 * 8).reshape(1, 3, 8, 8).float()
+    expected = image2patches(x, 2, 2, transformation)
+
+    result = torch.zeros_like(expected)
+    result = workbench.invoke_test("biref_image_to_patches_2", x, result, {})
+
+    workbench.print_results(result, expected)
     assert torch.allclose(result, expected)
