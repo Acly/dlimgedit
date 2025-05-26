@@ -72,7 +72,7 @@ std::array<float, 4> preprocess_prompt(Region region, Extent input_image_extent)
 
 Tensor embed_points(ModelRef m, Tensor coords);
 Tensor embed_box(ModelRef m, Tensor coords);
-Tensor no_mask_embed(ModelRef m, int embedding_size = 64);
+Tensor no_mask_embed(ModelRef m);
 
 float transform_coord(int p, float scale, int image_size = 1024);
 Tensor position_embedding_random(ModelRef m, Tensor coords);

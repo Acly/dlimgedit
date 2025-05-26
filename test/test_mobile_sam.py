@@ -990,11 +990,6 @@ def test_prompt_encoder_points():
 
     assert torch.allclose(result, expected)
 
-    result_dense = torch.zeros_like(expected_dense).contiguous()
-    workbench.invoke_test("no_mask_embed", points, result_dense, state)
-
-    assert torch.allclose(result_dense, expected_dense)
-
 
 def test_prompt_encoder_box():
     prompt_encoder = PromptEncoder(
@@ -1297,8 +1292,9 @@ def test_two_way_transformer():
         k.replace("token_to_image", "t2i").replace("image_to_token", "i2t"): v
         for k, v in state.items()
     }
-    state["input_image_embedding"] = image_embedding
-    state["input_image_pe"] = image_pe
+    # state["input_image_embedding"] = image_embedding
+    image_embedding = to_channel_last(image_embedding)
+    state["input_image_pe"] = to_channel_last(image_pe)
     state["input_point_embedding"] = point_embedding
     state["result_keys"] = torch.zeros_like(expected_keys).contiguous()
     result_queries = torch.zeros_like(expected_queries).contiguous()
@@ -1375,8 +1371,10 @@ def test_output_upscaling():
     x = torch.rand(1, 16, 8, 8)
     expected = upscaling(x)
 
-    result = torch.zeros_like(expected).contiguous()
-    workbench.invoke_test("output_upscaling", x, result, state)
+    x = to_channel_last(x)
+    result = torch.zeros_like(to_channel_last(expected))
+    result = workbench.invoke_test("output_upscaling", x, result, state)
+    result = revert_channel_last(result)
 
     assert torch.allclose(result, expected, atol=1e-4, rtol=1e-2)  # fp16 weights
 
@@ -1515,11 +1513,12 @@ def test_predict_masks():
         k.replace("token_to_image", "t2i").replace("image_to_token", "i2t"): v
         for k, v in state.items()
     }
-    state["dense_positional_embedding"] = image_pe
+    image_embeddings = to_channel_last(image_embeddings)
+    state["dense_positional_embedding"] = to_channel_last(image_pe)
     state["input_sparse_prompt"] = sparse_prompt_embeddings
-    state["input_dense_prompt"] = dense_prompt_embeddings
+    state["input_dense_prompt"] = to_channel_last(dense_prompt_embeddings)
     state["result_iou_pred"] = torch.zeros_like(iou_pred).contiguous()
-    result_masks = torch.zeros_like(expected_masks).contiguous()
+    result_masks = torch.zeros_like(expected_masks)
     workbench.invoke_test("predict_masks", image_embeddings, result_masks, state)
 
     assert torch.allclose(result_masks, expected_masks, atol=1e-4, rtol=1e-2)

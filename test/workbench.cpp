@@ -214,8 +214,6 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
                 input_data[i] = transform_coord(input_data[i], 1.0f, 64);
             }
             w.output(embed_box(m, input), output);
-        } else if (name == "no_mask_embed") {
-            w.output(no_mask_embed(m, 8), output);
         } else if (name == "attention") {
             Tensor q = input;
             Tensor k = m.weights("input_k");

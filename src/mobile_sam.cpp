@@ -60,16 +60,10 @@ Tensor conv_transpose_2d(ModelRef m, Tensor x, int stride) {
     if (m.backend == GGMLBackend::cpu) {
         // TODO: ggml_conv_transpose_2d_p0 expects fp16 weights
         weight = ggml_cast(m, weight, GGML_TYPE_F16);
-        weight = ggml_cont(m, ggml_permute(m, weight, 3, 0, 1, 2));
-        x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3));
-        x = ggml_conv_transpose_2d_p0(m, weight, x, stride);
-        x = ggml_cont(m, ggml_permute(m, x, 1, 2, 0, 3));
-    } else {
-        weight = ggml_permute(m, weight, 3, 0, 1, 2);
-        x = ggml_permute(m, x, 2, 0, 1, 3);
-        x = ggml_conv_transpose_2d_p0(m, weight, x, stride);
-        x = ggml_permute(m, x, 1, 2, 0, 3);
     }
+    x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3)); // -> whcn
+    x = ggml_conv_transpose_2d_p0(m, weight, x, stride);
+    x = ggml_cont(m, ggml_permute(m, x, 1, 2, 0, 3)); // -> cwhn
     if (Tensor bias = m.find("bias")) {
         x = ggml_add_inplace(m, x, bias);
     }
@@ -423,7 +417,7 @@ Tensor embed_box(ModelRef m, Tensor coords) {
     return x;
 }
 
-Tensor no_mask_embed(ModelRef m, int) { return m.weights("no_mask_embed.weight"); }
+Tensor no_mask_embed(ModelRef m) { return m.weights("no_mask_embed.weight"); }
 
 //
 // Mask Decoder

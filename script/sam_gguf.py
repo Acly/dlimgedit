@@ -94,8 +94,8 @@ for name, tensor in model.items():
         assert tensor.shape[2] == tensor.shape[3] and tensor.shape[2] <= 3
         tensor = conv_2d_kernel_to_nhwc(tensor)
 
-    if "output_upscaling" in name and tensor.dim() == 4:
-        tensor = conv_transpose_2d_kernel_to_nhwc(tensor)
+    # if "output_upscaling" in name and tensor.dim() == 4:
+    #     tensor = conv_transpose_2d_kernel_to_nhwc(tensor)
 
     # Precompute dense positional embeddings from random matrix stored in the model
     if name == "prompt_encoder.pe_layer.positional_encoding_gaussian_matrix":
