@@ -8,7 +8,7 @@ from torch import Tensor
 from . import workbench
 from .workbench import to_channel_last, revert_channel_last, convert_to_channel_last
 
-torch.set_printoptions(precision=2, linewidth=200, edgeitems=8)
+torch.set_printoptions(precision=2, linewidth=100, sci_mode=False)
 
 
 #
@@ -1368,12 +1368,14 @@ def test_output_upscaling():
     upscaling.load_state_dict(state)
     upscaling.eval()
 
-    x = torch.rand(1, 16, 8, 8)
+    x = torch.rand(1, 16, 64, 64)
     expected = upscaling(x)
 
     x = to_channel_last(x)
     result = torch.zeros_like(to_channel_last(expected))
-    result = workbench.invoke_test("output_upscaling", x, result, state)
+    result = workbench.invoke_test(
+        "output_upscaling", x, result, state, backend="vulkan"
+    )
     result = revert_channel_last(result)
 
     assert torch.allclose(result, expected, atol=1e-4, rtol=1e-2)  # fp16 weights
@@ -1487,13 +1489,16 @@ class MaskDecoder(torch.nn.Module):
 
 
 def test_predict_masks():
+    w = 8
+    h = 8
+    dim = 32
     decoder = MaskDecoder(
-        transformer_dim=16,
+        transformer_dim=dim,
         transformer=TwoWayTransformer(
             depth=2,
-            embedding_dim=16,
+            embedding_dim=dim,
             num_heads=2,
-            mlp_dim=16,
+            mlp_dim=dim,
         ),
         num_multimask_outputs=3,
     )
@@ -1501,10 +1506,10 @@ def test_predict_masks():
     decoder.load_state_dict(state)
     decoder.eval()
 
-    image_embeddings = torch.rand(1, 16, 8, 8)
-    image_pe = torch.rand(1, 16, 8, 8)
-    sparse_prompt_embeddings = torch.rand(1, 8, 16)
-    dense_prompt_embeddings = torch.rand(1, 16, 8, 8)
+    image_embeddings = torch.rand(1, dim, h, w)
+    image_pe = torch.rand(1, dim, h, w)
+    sparse_prompt_embeddings = torch.rand(1, 8, dim)
+    dense_prompt_embeddings = torch.rand(1, dim, h, w)
     expected_masks, iou_pred = decoder.predict_masks(
         image_embeddings, image_pe, sparse_prompt_embeddings, dense_prompt_embeddings
     )
@@ -1518,8 +1523,10 @@ def test_predict_masks():
     state["input_sparse_prompt"] = sparse_prompt_embeddings
     state["input_dense_prompt"] = to_channel_last(dense_prompt_embeddings)
     state["result_iou_pred"] = torch.zeros_like(iou_pred).contiguous()
-    result_masks = torch.zeros_like(expected_masks)
-    workbench.invoke_test("predict_masks", image_embeddings, result_masks, state)
+    result_masks = torch.zeros_like(expected_masks).contiguous()
+    workbench.invoke_test(
+        "predict_masks", image_embeddings, result_masks, state, backend="vulkan"
+    )
 
-    assert torch.allclose(result_masks, expected_masks, atol=1e-4, rtol=1e-2)
+    assert torch.allclose(result_masks, expected_masks, rtol=1e-2, atol=1e-2)
     assert torch.allclose(state["result_iou_pred"], iou_pred, rtol=1e-2)

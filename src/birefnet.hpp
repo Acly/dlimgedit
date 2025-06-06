@@ -617,6 +617,7 @@ inline Tensor decode(ModelRef m, Tensor x, SwinResult const& features) {
     _p1 = ggml_concat(m, _p1, p1_ipt, 0);
 
     Tensor p1_out = conv_2d(m["conv_out1.0"], _p1);
+    p1_out = ggml_sigmoid_inplace(m, p1_out);
     return m.named(p1_out);
 }
 

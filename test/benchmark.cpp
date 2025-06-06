@@ -131,7 +131,7 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
         image_embeddings_data.resize(ggml_nelements(image_embeddings));
         ggml_backend_tensor_get(
             image_embeddings, image_embeddings_data.data(), 0, ggml_nbytes(image_embeddings));
-        // print_tensor(image_embeddings_out);
+        // print_tensor(image_embeddings);
     }
 
     auto time_image_embed = std::chrono::steady_clock::now();
@@ -508,10 +508,10 @@ void test_conv_transpose_2d(std::string_view method) {
     ggml_time_init();
     const int iter = 10;
 
-    int ci = 128;
-    int co = 160;
+    int ci = 160;
+    int co = 128;
     int w = 256;
-    int h = 256;
+    int h = 128;
     int n = 1;
     int stride = 2;
     int kw = 3;

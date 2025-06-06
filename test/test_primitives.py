@@ -122,7 +122,7 @@ def test_conv_transpose_2d(scenario: str):
         "stride2": (3, 2),
         "nchw": (3, 1),
     }[scenario]
-    x = torch.arange(11 * 4 * 5).reshape(1, 11, 4, 5).float()
+    x = torch.arange(2 * 11 * 4 * 5).reshape(2, 11, 4, 5).float()
     weight = torch.arange(11 * 2 * ksize * ksize).reshape(11, 2, ksize, ksize).float()
     bias = None
     expected = torch.nn.functional.conv_transpose2d(x, weight, bias, stride=stride)
@@ -130,7 +130,6 @@ def test_conv_transpose_2d(scenario: str):
     result = torch.zeros_like(expected)
     if scenario != "nchw":
         x = to_channel_last(x)  # -> [N, H, W, C_in]
-        weight = weight.permute(1, 2, 3, 0).contiguous()  # -> [C_out, H, W, C_in]
         result = to_channel_last(result)
 
     workbench.invoke_test(
@@ -207,6 +206,7 @@ def test_window_partition(backend: str):
 
     assert torch.allclose(result, expected)
 
+
 @pytest.mark.parametrize("shift", [(0, 2, -1, 0), (0, -2, 0, 3)])
 def test_roll(shift: tuple[int, int, int, int]):
     x = torch.arange(4 * 5 * 6).reshape(1, 4, 5, 6).float()
@@ -216,5 +216,21 @@ def test_roll(shift: tuple[int, int, int, int]):
 
     result = torch.zeros_like(expected)
     result = workbench.invoke_test(f"roll_{shift}", x, result, {})
+
+    assert torch.allclose(result, expected)
+
+
+@pytest.mark.parametrize(
+    "scenario", ["upscale_align_corners", "downscale_align_corners"]
+)
+def test_interpolate(scenario: str):
+    x = torch.arange(1 * 8 * 128 * 128).reshape(1, 8, 128, 128).float() / 10000.0
+    target_size = (258, 256) if scenario == "upscale_align_corners" else (62, 64)
+    expected = torch.nn.functional.interpolate(
+        x, size=target_size, mode="bilinear", align_corners=True
+    )
+
+    result = torch.zeros_like(expected)
+    result = workbench.invoke_test(scenario, x, result, {})
 
     assert torch.allclose(result, expected)

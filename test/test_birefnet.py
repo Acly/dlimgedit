@@ -1,3 +1,5 @@
+from pathlib import Path
+from typing import NamedTuple
 import torch
 import torchvision
 import math
@@ -11,7 +13,7 @@ from . import workbench
 from .workbench import to_channel_last, revert_channel_last, convert_to_channel_last
 from .workbench import input_tensor, generate_state
 
-torch.set_printoptions(precision=3, linewidth=200, edgeitems=8, sci_mode=False)
+torch.set_printoptions(precision=3, linewidth=100, edgeitems=6, sci_mode=False)
 
 
 class WindowAttention(nn.Module):
@@ -527,7 +529,6 @@ def test_swin_layer():
     result = torch.zeros_like(expected)
     result = workbench.invoke_test("biref_swin_layer", x, result, state)
 
-    # workbench.print_results(result, expected)
     assert torch.allclose(result, expected)
 
 
@@ -734,7 +735,6 @@ def test_swin_transformer():
 
     for i, e in enumerate(expected):
         result[i] = revert_channel_last(result[i])
-        # workbench.print_results(result[i], e)
         assert torch.allclose(result[i], e, atol=1e-3)
 
 
@@ -797,7 +797,6 @@ def test_encode():
 
     for i, e in enumerate(expected):
         result = revert_channel_last(state[f"output{i}"])
-        # workbench.print_results(result, e)
         assert torch.allclose(result, e)
 
 
@@ -832,7 +831,6 @@ def test_conv_2d_deform():
     result = workbench.invoke_test("conv_2d_deform", x, result, state)
     result = revert_channel_last(result)
 
-    # workbench.print_results(result, expected)
     assert torch.allclose(result, expected)
 
 
@@ -909,6 +907,7 @@ def shorten_weight_name(name: str):
         .replace("modulator_conv", "modulator")
         .replace("regular_conv", "conv")
         .replace("atrous_conv", "conv")
+        .replace("decoder_block", "block")
     )
 
 
@@ -927,7 +926,6 @@ def test_deformable_conv_2d():
     result = workbench.invoke_test("biref_deformable_conv_2d", x, result, state)
     result = revert_channel_last(result)
 
-    workbench.print_results(result, expected)
     assert torch.allclose(result, expected)
 
 
@@ -1103,17 +1101,255 @@ def test_basic_dec_blk():
     assert torch.allclose(result, expected)
 
 
-def image2patches(image, grid_h, grid_w, transformation: str):
-    return rearrange(image, transformation, hg=grid_h, wg=grid_w)
+def image2patches(
+    image,
+    grid_h=2,
+    grid_w=2,
+    patch_ref=None,
+    transformation="b c (hg h) (wg w) -> (b hg wg) c h w",
+):
+    if patch_ref is not None:
+        grid_h, grid_w = (
+            image.shape[-2] // patch_ref.shape[-2],
+            image.shape[-1] // patch_ref.shape[-1],
+        )
+    patches = rearrange(image, transformation, hg=grid_h, wg=grid_w)
+    return patches
 
 
 def test_image_to_patches():
     transformation = "b c (hg h) (wg w) -> b (c hg wg) h w"
     x = torch.arange(3 * 8 * 8).reshape(1, 3, 8, 8).float()
-    expected = image2patches(x, 2, 2, transformation)
+    expected = image2patches(x, 2, 2, None, transformation)
 
     result = torch.zeros_like(expected)
     result = workbench.invoke_test("biref_image_to_patches_2", x, result, {})
 
-    workbench.print_results(result, expected)
+    assert torch.allclose(result, expected)
+
+
+class SimpleConvs(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, inter_channels=64) -> None:
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, inter_channels, 3, 1, 1)
+        self.conv_out = nn.Conv2d(inter_channels, out_channels, 3, 1, 1)
+
+    def forward(self, x):
+        return self.conv_out(self.conv1(x))
+
+
+class BasicLatBlk(nn.Module):
+    def __init__(self, in_channels=64, out_channels=64, inter_channels=64):
+        super(BasicLatBlk, self).__init__()
+        # inter_channels = in_channels // 4 if config.dec_channels_inter == 'adap' else 64
+        self.conv = nn.Conv2d(in_channels, out_channels, 1, 1, 0)
+
+    def forward(self, x):
+        x = self.conv(x)
+        return x
+
+
+class Config(NamedTuple):
+    dec_ipt: bool = True
+    dec_ipt_split: bool = True
+    ms_supervision: bool = True
+    out_ref: bool = True
+    batch_size: int = 4
+
+
+# fmt: off
+class Decoder(nn.Module):
+    def __init__(self, channels):
+        super(Decoder, self).__init__()
+        self.config = Config()
+        DecoderBlock = BasicDecBlk
+        LateralBlock = BasicLatBlk
+
+        if self.config.dec_ipt:
+            self.split = self.config.dec_ipt_split
+            N_dec_ipt = 64
+            DBlock = SimpleConvs
+            ic = 64
+            ipt_cha_opt = 1
+            self.ipt_blk5 = DBlock(2**10*3 if self.split else 3, [N_dec_ipt, channels[0]//8][ipt_cha_opt], inter_channels=ic)
+            self.ipt_blk4 = DBlock(2**8*3 if self.split else 3, [N_dec_ipt, channels[0]//8][ipt_cha_opt], inter_channels=ic)
+            self.ipt_blk3 = DBlock(2**6*3 if self.split else 3, [N_dec_ipt, channels[1]//8][ipt_cha_opt], inter_channels=ic)
+            self.ipt_blk2 = DBlock(2**4*3 if self.split else 3, [N_dec_ipt, channels[2]//8][ipt_cha_opt], inter_channels=ic)
+            self.ipt_blk1 = DBlock(2**0*3 if self.split else 3, [N_dec_ipt, channels[3]//8][ipt_cha_opt], inter_channels=ic)
+        else:
+            self.split = None
+
+        self.decoder_block4 = DecoderBlock(channels[0]+([N_dec_ipt, channels[0]//8][ipt_cha_opt] if self.config.dec_ipt else 0), channels[1])
+        self.decoder_block3 = DecoderBlock(channels[1]+([N_dec_ipt, channels[0]//8][ipt_cha_opt] if self.config.dec_ipt else 0), channels[2])
+        self.decoder_block2 = DecoderBlock(channels[2]+([N_dec_ipt, channels[1]//8][ipt_cha_opt] if self.config.dec_ipt else 0), channels[3])
+        self.decoder_block1 = DecoderBlock(channels[3]+([N_dec_ipt, channels[2]//8][ipt_cha_opt] if self.config.dec_ipt else 0), channels[3]//2)
+        self.conv_out1 = nn.Sequential(nn.Conv2d(channels[3]//2+([N_dec_ipt, channels[3]//8][ipt_cha_opt] if self.config.dec_ipt else 0), 1, 1, 1, 0))
+
+        self.lateral_block4 = LateralBlock(channels[1], channels[1])
+        self.lateral_block3 = LateralBlock(channels[2], channels[2])
+        self.lateral_block2 = LateralBlock(channels[3], channels[3])
+
+        if self.config.ms_supervision:
+            self.conv_ms_spvn_4 = nn.Conv2d(channels[1], 1, 1, 1, 0)
+            self.conv_ms_spvn_3 = nn.Conv2d(channels[2], 1, 1, 1, 0)
+            self.conv_ms_spvn_2 = nn.Conv2d(channels[3], 1, 1, 1, 0)
+
+            if self.config.out_ref:
+                _N = 16
+                self.gdt_convs_4 = nn.Sequential(nn.Conv2d(channels[1], _N, 3, 1, 1), nn.BatchNorm2d(_N) if self.config.batch_size > 1 else nn.Identity(), nn.ReLU(inplace=True))
+                self.gdt_convs_3 = nn.Sequential(nn.Conv2d(channels[2], _N, 3, 1, 1), nn.BatchNorm2d(_N) if self.config.batch_size > 1 else nn.Identity(), nn.ReLU(inplace=True))
+                self.gdt_convs_2 = nn.Sequential(nn.Conv2d(channels[3], _N, 3, 1, 1), nn.BatchNorm2d(_N) if self.config.batch_size > 1 else nn.Identity(), nn.ReLU(inplace=True))
+
+                self.gdt_convs_pred_4 = nn.Sequential(nn.Conv2d(_N, 1, 1, 1, 0))
+                self.gdt_convs_pred_3 = nn.Sequential(nn.Conv2d(_N, 1, 1, 1, 0))
+                self.gdt_convs_pred_2 = nn.Sequential(nn.Conv2d(_N, 1, 1, 1, 0))
+                
+                self.gdt_convs_attn_4 = nn.Sequential(nn.Conv2d(_N, 1, 1, 1, 0))
+                self.gdt_convs_attn_3 = nn.Sequential(nn.Conv2d(_N, 1, 1, 1, 0))
+                self.gdt_convs_attn_2 = nn.Sequential(nn.Conv2d(_N, 1, 1, 1, 0))
+
+    def forward(self, features):
+        if self.training and self.config.out_ref:
+            outs_gdt_pred = []
+            outs_gdt_label = []
+            x, x1, x2, x3, x4, gdt_gt = features
+        else:
+            x, x1, x2, x3, x4 = features
+        outs = []
+
+        if self.config.dec_ipt:
+            patches_batch = image2patches(x, patch_ref=x4, transformation='b c (hg h) (wg w) -> b (c hg wg) h w') if self.split else x
+            x4 = torch.cat((x4, self.ipt_blk5(F.interpolate(patches_batch, size=x4.shape[2:], mode='bilinear', align_corners=True))), 1)
+        p4 = self.decoder_block4(x4)
+        m4 = self.conv_ms_spvn_4(p4) if self.config.ms_supervision and self.training else None
+        if self.config.out_ref:
+            p4_gdt = self.gdt_convs_4(p4)
+            if self.training:
+                # >> GT:
+                m4_dia = m4
+                gdt_label_main_4 = gdt_gt * F.interpolate(m4_dia, size=gdt_gt.shape[2:], mode='bilinear', align_corners=True)
+                outs_gdt_label.append(gdt_label_main_4)
+                # >> Pred:
+                gdt_pred_4 = self.gdt_convs_pred_4(p4_gdt)
+                outs_gdt_pred.append(gdt_pred_4)
+            gdt_attn_4 = self.gdt_convs_attn_4(p4_gdt).sigmoid()
+            # >> Finally:
+            p4 = p4 * gdt_attn_4
+        _p4 = F.interpolate(p4, size=x3.shape[2:], mode='bilinear', align_corners=True)
+        _p3 = _p4 + self.lateral_block4(x3)
+
+        # return [_p3]
+
+        if self.config.dec_ipt:
+            patches_batch = image2patches(x, patch_ref=_p3, transformation='b c (hg h) (wg w) -> b (c hg wg) h w') if self.split else x
+            _p3 = torch.cat((_p3, self.ipt_blk4(F.interpolate(patches_batch, size=x3.shape[2:], mode='bilinear', align_corners=True))), 1)
+        p3 = self.decoder_block3(_p3)
+        m3 = self.conv_ms_spvn_3(p3) if self.config.ms_supervision and self.training else None
+        if self.config.out_ref:
+            p3_gdt = self.gdt_convs_3(p3)
+            if self.training:
+                # >> GT:
+                # m3 --dilation--> m3_dia
+                # G_3^gt * m3_dia --> G_3^m, which is the label of gradient
+                m3_dia = m3
+                gdt_label_main_3 = gdt_gt * F.interpolate(m3_dia, size=gdt_gt.shape[2:], mode='bilinear', align_corners=True)
+                outs_gdt_label.append(gdt_label_main_3)
+                # >> Pred:
+                # p3 --conv--BN--> F_3^G, where F_3^G predicts the \hat{G_3} with xx
+                # F_3^G --sigmoid--> A_3^G
+                gdt_pred_3 = self.gdt_convs_pred_3(p3_gdt)
+                outs_gdt_pred.append(gdt_pred_3)
+            gdt_attn_3 = self.gdt_convs_attn_3(p3_gdt).sigmoid()
+            # >> Finally:
+            # p3 = p3 * A_3^G
+            p3 = p3 * gdt_attn_3
+        _p3 = F.interpolate(p3, size=x2.shape[2:], mode='bilinear', align_corners=True)
+        _p2 = _p3 + self.lateral_block3(x2)
+
+        if self.config.dec_ipt:
+            patches_batch = image2patches(x, patch_ref=_p2, transformation='b c (hg h) (wg w) -> b (c hg wg) h w') if self.split else x
+            _p2 = torch.cat((_p2, self.ipt_blk3(F.interpolate(patches_batch, size=x2.shape[2:], mode='bilinear', align_corners=True))), 1)
+        p2 = self.decoder_block2(_p2)
+        m2 = self.conv_ms_spvn_2(p2) if self.config.ms_supervision and self.training else None
+        if self.config.out_ref:
+            p2_gdt = self.gdt_convs_2(p2)
+            if self.training:
+                # >> GT:
+                m2_dia = m2
+                gdt_label_main_2 = gdt_gt * F.interpolate(m2_dia, size=gdt_gt.shape[2:], mode='bilinear', align_corners=True)
+                outs_gdt_label.append(gdt_label_main_2)
+                # >> Pred:
+                gdt_pred_2 = self.gdt_convs_pred_2(p2_gdt)
+                outs_gdt_pred.append(gdt_pred_2)
+            gdt_attn_2 = self.gdt_convs_attn_2(p2_gdt).sigmoid()
+            # >> Finally:
+            p2 = p2 * gdt_attn_2
+        _p2 = F.interpolate(p2, size=x1.shape[2:], mode='bilinear', align_corners=True)
+        _p1 = _p2 + self.lateral_block2(x1)
+
+        if self.config.dec_ipt:
+            patches_batch = image2patches(x, patch_ref=_p1, transformation='b c (hg h) (wg w) -> b (c hg wg) h w') if self.split else x
+            _p1 = torch.cat((_p1, self.ipt_blk2(F.interpolate(patches_batch, size=x1.shape[2:], mode='bilinear', align_corners=True))), 1)
+        _p1 = self.decoder_block1(_p1)
+        _p1 = F.interpolate(_p1, size=x.shape[2:], mode='bilinear', align_corners=True)
+
+        if self.config.dec_ipt:
+            patches_batch = image2patches(x, patch_ref=_p1, transformation='b c (hg h) (wg w) -> b (c hg wg) h w') if self.split else x
+            _p1 = torch.cat((_p1, self.ipt_blk1(F.interpolate(patches_batch, size=x.shape[2:], mode='bilinear', align_corners=True))), 1)
+        p1_out = self.conv_out1(_p1)
+
+        if self.config.ms_supervision and self.training:
+            outs.append(m4)
+            outs.append(m3)
+            outs.append(m2)
+        outs.append(p1_out)
+        return outs if not (self.config.out_ref and self.training) else ([outs_gdt_pred, outs_gdt_label], outs)
+# fmt: on
+
+
+def test_decoder():
+    from safetensors.torch import load_file
+
+    # Running the full decoder doesn't really work with randomized weights
+    reference = "BiRefNet.safetensors"
+    if not Path(reference).exists():
+        pytest.skip(f"Reference file {reference} not found. Skipping test.")
+    ref_state = load_file(reference)
+
+    channels = [3072, 1536, 768, 384]
+    decoder = Decoder(channels)
+    state = decoder.state_dict()
+    for k, v in state.items():
+        key=f"decoder.{k}"
+        if key in ref_state:
+            state[k] = ref_state[key].float()
+        else:
+            print(f"Warning: {k} not found in decoder state_dict")
+    decoder.load_state_dict(state)
+    decoder.eval()
+
+    x = torch.rand(1, 3, 1024, 1024)
+    x1 = torch.rand(1, 384, 256, 256) * 2 - 1
+    x2 = torch.rand(1, 768, 128, 128) * 2 - 1
+    x3 = torch.rand(1, 1536, 64, 64) * 2 - 1
+    x4 = torch.rand(1, 1024 * 3, 32, 32) * 2 - 1
+
+    expected = decoder((x, x1, x2, x3, x4))[0]
+    expected = expected.sigmoid()
+
+    state = add_variance_epsilon(state)
+    state = {shorten_weight_name(k): v for k, v in state.items()}
+    state = convert_to_channel_last(state, key="conv")
+    state = convert_to_channel_last(state, key="pool.1")
+
+    x = to_channel_last(x)
+    state["x1"] = to_channel_last(x1)
+    state["x2"] = to_channel_last(x2)
+    state["x3"] = to_channel_last(x3)
+    state["x4"] = to_channel_last(x4)
+
+    result = to_channel_last(torch.zeros_like(expected))
+    result = workbench.invoke_test("biref_decode", x, result, state)
+    result = revert_channel_last(result)
+
     assert torch.allclose(result, expected)

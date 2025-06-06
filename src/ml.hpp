@@ -11,6 +11,7 @@
 #include <ggml.h>
 
 #include <filesystem>
+#include <fstream>
 #include <span>
 
 namespace dlimg {
@@ -218,6 +219,19 @@ struct ModelRef {
 void set_tensor_data(Tensor tensor, std::span<float> data) {
     ASSERT(ggml_nbytes(tensor) == data.size_bytes());
     ggml_backend_tensor_set(tensor, data.data(), 0, ggml_nbytes(tensor));
+}
+
+void load_tensor_data(Tensor tensor, Path const& filepath) {
+    std::ifstream file(filepath, std::ios::binary);
+    if (!file) {
+        throw std::runtime_error(fmt::format("Failed to open file: {}", filepath.string()));
+    }
+    std::vector<float> data(ggml_nelements(tensor));
+    file.read(reinterpret_cast<char*>(data.data()), ggml_nbytes(tensor));
+    if (!file) {
+        throw std::runtime_error(fmt::format("Failed to read data from file: {}", filepath.string()));
+    }
+    set_tensor_data(tensor, data);
 }
 
 template <typename T>

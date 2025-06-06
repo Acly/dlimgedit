@@ -171,6 +171,12 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             w.output(ggml_roll(m, input, 3, 0, -2, 0), output);
         } else if (name == "layer_norm") {
             w.output(layer_norm(m, input), output);
+        } else if (name == "upscale_align_corners") {
+            int mode = GGML_SCALE_MODE_BILINEAR | GGML_SCALE_ALIGN_CORNERS;
+            w.output(ggml_upscale_ext(m, input, 256, 258, 8, 1, mode), output);
+        } else if (name == "downscale_align_corners") {
+            int mode = GGML_SCALE_MODE_BILINEAR | GGML_SCALE_ALIGN_CORNERS;
+            w.output(ggml_upscale_ext(m, input, 64, 62, 8, 1, mode), output);
         } else if (name == "linear") {
             w.output(linear(m, input), output);
         } else if (name == "conv_2d_batch_norm") {
@@ -322,7 +328,7 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
                 w.output(xs[i], inputs[input_count - 4 + i]);
             }
         } else if (name == "biref_deformable_conv_2d") {
-            w.output(birefnet::deformable_conv_2d(m, input, 1, 1), output);     
+            w.output(birefnet::deformable_conv_2d(m, input, 1, 1), output);
         } else if (name == "biref_global_avg_pool") {
             w.output(birefnet::global_avg_pool(m, input), output);
         } else if (name == "biref_aspp_deformable") {
@@ -331,6 +337,12 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             w.output(birefnet::basic_decoder_block(m, input), output);
         } else if (name == "biref_image_to_patches_2") {
             w.output(birefnet::image_to_patches(m, input, 4, 4), output);
+        } else if (name == "biref_decode") {
+            birefnet::SwinResult features;
+            for (int i = 0; i < 4; ++i) {
+                features[i] = m.find(TensorName("x{}", i + 1).c_str());
+            }
+            w.output(birefnet::decode(m, input, features), output);
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }
