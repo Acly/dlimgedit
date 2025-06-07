@@ -208,7 +208,11 @@ void run_birefnet(Path const& model_path, Path const& input_path, Path const& ou
     auto image_data = birefnet::preprocess_image(input_image, 1024);
 
     Backend_ backend = Backend_::init(backend_kind);
-    Model model = Model::load(model_path, backend, 6);
+
+    ModelLoadParams mparams;
+    mparams.float_type = backend.preferred_float_type();
+    mparams.n_extra_tensors = 6; // for relative position index and attention masks
+    Model model = Model::load(model_path, backend, mparams);
 
     birefnet::SwinParams params = birefnet::swin_l_params;
     {

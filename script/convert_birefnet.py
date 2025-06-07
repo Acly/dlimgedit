@@ -62,9 +62,6 @@ for name in model.keys():
     if is_conv:
         tensor = conv_2d_kernel_to_nhwc(tensor)
 
-    if tensor.dtype == torch.float16:
-        tensor = tensor.to(torch.float32)
-
     tensor_data = tensor.numpy()
     print("⇄" if is_conv else "○", name, tensor.shape, tensor_data.dtype)
     writer.add_tensor(name, tensor_data)

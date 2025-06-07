@@ -20,12 +20,63 @@ using Path = std::filesystem::path;
 using TensorName = FixedString<GGML_MAX_NAME>;
 using Tensor = ggml_tensor*;
 using Shape4 = std::array<int64_t, 4>;
+using std::byte;
 
 Shape4 nelements(Tensor t) { return {t->ne[0], t->ne[1], t->ne[2], t->ne[3]}; }
 
 enum class GGMLBackend { cpu = 1, vulkan = 2 };
 
-bool is_gpu(GGMLBackend backend) { return backend == GGMLBackend::vulkan; }
+inline bool is_gpu(GGMLBackend backend) { return backend == GGMLBackend::vulkan; }
+
+inline bool is_float_type(ggml_type t) {
+    return t != GGML_TYPE_I8 && t != GGML_TYPE_I16 && t != GGML_TYPE_I32 && t != GGML_TYPE_I64;
+}
+
+struct FloatConverter {
+    ggml_type target;
+    ggml_type_traits const* dst_traits = nullptr;
+    std::vector<float> f32_buffer;
+    std::vector<byte> dst_buffer;
+
+    explicit FloatConverter(ggml_type target_type) : target(target_type) {
+        if (target != GGML_TYPE_COUNT) {
+            dst_traits = ggml_get_type_traits(target_type);
+        }
+    }
+
+    ggml_type target_type(ggml_tensor const* t) const {
+        if (target == GGML_TYPE_COUNT || !is_float_type(t->type)) {
+            return t->type;
+        }
+        return target;
+    }
+
+    void const* operator()(ggml_tensor const* src, ggml_tensor const* dst) {
+        if (target == GGML_TYPE_COUNT || src->type == dst->type) {
+            return src->data;
+        }
+        ASSERT(dst->type == target);
+
+        float const* f32_data = reinterpret_cast<float const*>(src->data);
+        if (src->type != GGML_TYPE_F32) {
+            if (int64_t(f32_buffer.size()) < ggml_nelements(src)) {
+                f32_buffer.resize(ggml_nelements(src));
+            }
+            ggml_type_traits const* src_traits = ggml_get_type_traits(src->type);
+            src_traits->to_float(src->data, f32_buffer.data(), ggml_nelements(src));
+            f32_data = f32_buffer.data();
+        }
+        void const* dst_data = f32_data;
+        if (target != GGML_TYPE_F32) {
+            if (dst_buffer.size() < ggml_nbytes(dst)) {
+                dst_buffer.resize(ggml_nbytes(dst));
+            }
+            dst_traits->from_float_ref(f32_data, dst_buffer.data(), ggml_nelements(dst));
+            dst_data = dst_buffer.data();
+        }
+        return dst_data;
+    }
+};
 
 struct Backend_ {
     GGMLBackend kind = GGMLBackend::cpu;
@@ -45,6 +96,18 @@ struct Backend_ {
     }
 
     operator ggml_backend_t() const { return handle.get(); }
+
+    ggml_type preferred_float_type() const {
+        if (kind == GGMLBackend::cpu) {
+            return GGML_TYPE_F32;
+        }
+        return GGML_TYPE_COUNT; // use model's float type
+    }
+};
+
+struct ModelLoadParams {
+    ggml_type float_type = GGML_TYPE_COUNT; // use type stored in GGUF file
+    int n_extra_tensors = 0;                // number of extra tensors to allocate in the context
 };
 
 struct Model {
@@ -54,7 +117,7 @@ struct Model {
     ggml_backend_buffer_ptr weights_buffer;
     std::vector<ggml_backend_buffer_ptr> extra_buffers;
 
-    static Model load(Path const& filepath, Backend_ const& backend, int n_extra_tensors = 0) {
+    static Model load(Path const& filepath, Backend_ const& backend, ModelLoadParams p = {}) {
         ggml_context* data_ctx;
         gguf_init_params params;
         params.no_alloc = false;
@@ -69,14 +132,16 @@ struct Model {
         int64_t n_weights = gguf_get_n_tensors(gguf_ctx.get());
 
         ggml_init_params model_ctx_params{};
-        model_ctx_params.mem_size = (n_weights + n_extra_tensors) * ggml_tensor_overhead();
+        model_ctx_params.mem_size = (n_weights + p.n_extra_tensors) * ggml_tensor_overhead();
         model_ctx_params.no_alloc = true;
         ggml_context_ptr model_ctx(ggml_init(model_ctx_params));
 
+        FloatConverter convert(p.float_type);
         for (int64_t i = 0; i < gguf_get_n_tensors(gguf_ctx.get()); ++i) {
             auto name = gguf_get_tensor_name(gguf_ctx.get(), i);
-            auto orig = ggml_get_tensor(data_ctx, name);
-            auto dup = ggml_dup_tensor(model_ctx.get(), orig);
+            Tensor orig = ggml_get_tensor(data_ctx, name);
+            Tensor dup = ggml_new_tensor(
+                model_ctx.get(), convert.target_type(orig), GGML_MAX_DIMS, orig->ne);
             ggml_set_name(dup, name);
         }
 
@@ -84,8 +149,9 @@ struct Model {
 
         for (ggml_tensor* t = ggml_get_first_tensor(model_ctx.get()); t != nullptr;
              t = ggml_get_next_tensor(model_ctx.get(), t)) {
-            auto data_tensor = ggml_get_tensor(data_ctx, ggml_get_name(t));
-            ggml_backend_tensor_set(t, ggml_get_data(data_tensor), 0, ggml_nbytes(data_tensor));
+            Tensor data_tensor = ggml_get_tensor(data_ctx, ggml_get_name(t));
+            void const* data = convert(data_tensor, t);
+            ggml_backend_tensor_set(t, data, 0, ggml_nbytes(t));
         }
         return Model{std::move(model_ctx), backend, backend.kind, std::move(buffer), {}};
     }
@@ -229,7 +295,8 @@ void load_tensor_data(Tensor tensor, Path const& filepath) {
     std::vector<float> data(ggml_nelements(tensor));
     file.read(reinterpret_cast<char*>(data.data()), ggml_nbytes(tensor));
     if (!file) {
-        throw std::runtime_error(fmt::format("Failed to read data from file: {}", filepath.string()));
+        throw std::runtime_error(
+            fmt::format("Failed to read data from file: {}", filepath.string()));
     }
     set_tensor_data(tensor, data);
 }
