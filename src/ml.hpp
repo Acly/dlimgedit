@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <span>
+#include <thread>
 
 namespace dlimg {
 
@@ -91,6 +92,8 @@ struct Backend_ {
             backend.handle.reset(ggml_backend_vk_init(0));
         } else {
             backend.handle.reset(ggml_backend_cpu_init());
+            uint32_t nthreads = std::max(1u, std::thread::hardware_concurrency() - 2);
+            ggml_backend_cpu_set_n_threads(backend.handle.get(), nthreads);
         }
         return backend;
     }
