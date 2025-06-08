@@ -153,8 +153,8 @@ Extent scale_extent(Extent extent, float scale) {
 }
 
 std::vector<float> preprocess_image(ImageView image) {
-    constexpr float mean[] = {123.675f, 116.28f, 103.53f};
-    constexpr float std[] = {58.395f, 57.12f, 57.375f};
+    constexpr float4 mean = float4(123.675f, 116.28f, 103.53f, 0.f);
+    constexpr float4 std = float4(58.395f, 57.12f, 57.375f, 1.f);
 
     std::optional<Image> resized;
     float scale = resize_longest_side(image.extent, image_size);
@@ -163,17 +163,8 @@ std::vector<float> preprocess_image(ImageView image) {
         image = ImageView(*resized);
     }
 
-    auto input_pixel = PixelAccessor(image);
     std::vector<float> result(3 * image_size * image_size);
-    for (int y = 0; y < image_size; ++y) {
-        for (int x = 0; x < image_size; ++x) {
-            for (int c = 0; c < 3; ++c) {
-                float value = float(input_pixel.get(image.pixels, x, y, c));
-                float normalized = (value - mean[c]) / std[c];
-                result[y * image_size * 3 + x * 3 + c] = normalized;
-            }
-        }
-    }
+    image_to_float(image, result, 3, mean, std);
     return result;
 }
 

@@ -15,8 +15,8 @@ using sam::layer_norm;
 using sam::linear;
 
 inline std::vector<float> preprocess_image(ImageView image, int image_size) {
-    constexpr float mean[] = {123.675f, 116.28f, 103.53f}; // 0.485, 0.456, 0.406
-    constexpr float std[] = {58.395f, 57.12f, 57.375f};    // 0.229, 0.224, 0.225
+    constexpr float4 mean = float4(123.675f, 116.28f, 103.53f, 0.f); // 0.485, 0.456, 0.406
+    constexpr float4 std = float4(58.395f, 57.12f, 57.375f, 1.f);    // 0.229, 0.224, 0.225
 
     std::optional<Image> resized;
     if (image.extent.width != image_size || image.extent.height != image_size) {
@@ -24,17 +24,8 @@ inline std::vector<float> preprocess_image(ImageView image, int image_size) {
         image = ImageView(*resized);
     }
 
-    auto input_pixel = PixelAccessor(image);
     std::vector<float> result(3 * image_size * image_size);
-    for (int y = 0; y < image_size; ++y) {
-        for (int x = 0; x < image_size; ++x) {
-            for (int c = 0; c < 3; ++c) {
-                float value = float(input_pixel.get(image.pixels, x, y, c));
-                float normalized = (value - mean[c]) / std[c];
-                result[y * image_size * 3 + x * 3 + c] = normalized;
-            }
-        }
-    }
+    image_to_float(image, result, 3, mean, std);
     return result;
 }
 

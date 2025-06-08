@@ -267,13 +267,23 @@ void run_birefnet(Path const& model_path, Path const& input_path, Path const& ou
         Image::save(output_mask, output_path_mask.c_str());
         fmt::print("Saved to {}\n", output_path_mask);
 
+        auto input_float =
+            std::vector<float4>(input_image.extent().width * input_image.extent().height);
+        image_to_float(
+            input_image,
+            std::span(reinterpret_cast<float*>(input_float.data()), input_float.size() * 4), 4);
+        auto resized_mask =
+            std::vector<float>(input_image.extent().width * input_image.extent().height);
+        image_to_float(output_mask, resized_mask, 1);
+        auto foreground = estimate_foreground(input_float, resized_mask, input_image.extent());
+
         Image output_image_rgba = Image(input_image.extent(), Channels::rgba);
         uint8_t* rgba = output_image_rgba.pixels();
-        uint8_t const* input_rgb = input_image.pixels();
         for (int i = 0; i < input_image.extent().width * input_image.extent().height; ++i) {
-            rgba[i * 4 + 0] = input_rgb[i * count(input_image.channels()) + 0];
-            rgba[i * 4 + 1] = input_rgb[i * count(input_image.channels()) + 1];
-            rgba[i * 4 + 2] = input_rgb[i * count(input_image.channels()) + 2];
+            float4 fg = foreground[i];
+            rgba[i * 4 + 0] = uint8_t(255.f * fg[0]);
+            rgba[i * 4 + 1] = uint8_t(255.f * fg[1]);
+            rgba[i * 4 + 2] = uint8_t(255.f * fg[2]);
             rgba[i * 4 + 3] = output_mask.pixels()[i];
         }
         std::string output_path_rgba = fmt::format("{}_rgba.png", output_path.string());

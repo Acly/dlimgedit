@@ -343,6 +343,19 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
                 features[i] = m.find(TensorName("x{}", i + 1).c_str());
             }
             w.output(birefnet::decode(m, input, features), output);
+        } else if (name == "blur") {
+            auto img = std::span(reinterpret_cast<float4*>(input->data), ggml_nelements(input) / 4);
+            auto out = std::span(reinterpret_cast<float4*>(output.data), output.size() / 4);
+            blur(img, out, Extent{1024, 1024}, 30);
+            return 0;
+        } else if (name == "estimate_foreground") {
+            auto mask = m.find("mask");
+            auto img = std::span(reinterpret_cast<float4*>(input->data), ggml_nelements(input) / 4);
+            auto alpha = std::span(reinterpret_cast<float*>(mask->data), ggml_nelements(mask));
+            auto result = estimate_foreground(img, alpha, Extent{256, 256}, 30);
+            ASSERT(result.size() == output.size() * 4);
+            memcpy(output.data, result.data(), output.size_bytes());
+            return 0;
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }
