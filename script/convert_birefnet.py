@@ -17,20 +17,23 @@ def conv_2d_kernel_to_nhwc(kernel: torch.Tensor):
         return kernel.permute(0, 2, 3, 1)  # C_out H W C_in
 
 
-fname_model = sys.argv[1]
-dir_out = sys.argv[2]
-fname_out = Path(dir_out) / Path(fname_model).name.replace(".safetensors", ".gguf")
+in_filepath = sys.argv[1]
+out_dir = sys.argv[2]
+convert_fp16 = len(sys.argv) > 3 and sys.argv[3] == "fp16"
+
+out_filename = Path(in_filepath).name.lower().replace(".safetensors", "")
+if convert_fp16:
+    out_filename += "-fp16"
+out_filename += ".gguf"
+out_filepath = Path(out_dir) / out_filename
 
 
-model: dict[str, torch.Tensor] = safetensors.safe_open(fname_model, "pt")
+model: dict[str, torch.Tensor] = safetensors.safe_open(in_filepath, "pt")
 
-writer = gguf.GGUFWriter(fname_out, "birefnet")
+writer = gguf.GGUFWriter(out_filepath, "birefnet")
 writer.add_name("BiRefNet")
 
-window_size = 12  # swin-l: 12, swin-t: 7
 batch_norm_eps = 1e-5
-
-pbt = None
 
 for name in model.keys():
     tensor = model.get_tensor(name)
@@ -61,6 +64,9 @@ for name in model.keys():
     )
     if is_conv:
         tensor = conv_2d_kernel_to_nhwc(tensor)
+
+    if convert_fp16 and tensor.dtype == torch.float32:
+        tensor = tensor.to(torch.float16)
 
     tensor_data = tensor.numpy()
     print("⇄" if is_conv else "○", name, tensor.shape, tensor_data.dtype)

@@ -319,6 +319,8 @@ struct SwinParams {
     int embed_dim;
     int window_size;
     std::array<SwinLayer, num_layers> layers;
+
+    static SwinParams detect(ModelRef m);
 };
 
 using SwinResult = std::array<Tensor, SwinParams::num_layers>;
@@ -368,6 +370,21 @@ constexpr SwinParams swin_l_params = {
 
 // clang-format on
 
+SwinParams SwinParams::detect(ModelRef m) {
+    Tensor t = m.find("bb.layers.0.blocks.0.attn.proj.bias");
+    if (t == nullptr) {
+        throw std::runtime_error("Failed to detect model parameters");
+    }
+    if (t->ne[0] == 96) {
+        return swin_t_params;
+    } else if (t->ne[0] == 192) {
+        return swin_l_params;
+    } else {
+        throw std::runtime_error(
+            fmt::format("Unsupported Swin Transformer embed dim: {}", t->ne[0]));
+    }
+}
+
 inline Tensor upscale_to_whcn(ModelRef m, Tensor x, Tensor target) {
     return ggml_upscale_ext(m, x, target->ne[0], target->ne[1], x->ne[2], x->ne[3],
                             GGML_SCALE_MODE_BILINEAR | GGML_SCALE_ALIGN_CORNERS);
@@ -376,7 +393,7 @@ inline Tensor upscale_to_whcn(ModelRef m, Tensor x, Tensor target) {
 inline Tensor upscale_to(ModelRef m, Tensor x, Tensor target) {
     x = ggml_cont(m, ggml_permute(m, x, 2, 0, 1, 3)); // cwhn -> whcn
     x = ggml_upscale_ext(m, x, target->ne[1], target->ne[2], x->ne[2], x->ne[3],
-                            GGML_SCALE_MODE_BILINEAR | GGML_SCALE_ALIGN_CORNERS);
+                         GGML_SCALE_MODE_BILINEAR | GGML_SCALE_ALIGN_CORNERS);
     x = ggml_cont(m, ggml_permute(m, x, 1, 2, 0, 3)); // whcn -> cwhn
     return x;
 }
@@ -613,7 +630,7 @@ inline Tensor decode(ModelRef m, Tensor x, SwinResult const& features) {
 }
 
 //
-// 
+//
 //
 
 inline Tensor run(ModelRef m, Tensor image, SwinParams const& encoder_params) {

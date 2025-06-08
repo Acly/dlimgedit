@@ -214,7 +214,7 @@ void run_birefnet(Path const& model_path, Path const& input_path, Path const& ou
     mparams.n_extra_tensors = 6; // for relative position index and attention masks
     Model model = Model::load(model_path, backend, mparams);
 
-    birefnet::SwinParams params = birefnet::swin_l_params;
+    auto params = birefnet::SwinParams::detect(model);
     {
         ModelRef m = ModelRef(model);
         auto rel_pos_index = birefnet::create_relative_position_index(m, params.window_size);
@@ -626,7 +626,7 @@ int main(int argc, char** argv) {
         } else if (arg1 == "conv_transpose_2d") {
             dlimg::test_conv_transpose_2d(argv[2]);
         } else if (arg1 == "birefnet") {
-            dlimg::run_birefnet("script/.ggml/birefnet.gguf", "test/input/cat_and_hat.png",
+            dlimg::run_birefnet("script/.ggml/birefnet_lite-fp16.gguf", "test/input/cat_and_hat.png",
                                 "test/result/birefnet_ggml", dlimg::GGMLBackend::cpu);
         } else if (arg1 == "vulkan") {
             dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
