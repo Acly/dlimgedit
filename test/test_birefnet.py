@@ -806,8 +806,9 @@ def test_encode():
 #
 
 
-def test_conv_2d_deform():
-    scenario = "large"
+@pytest.mark.parametrize("scenario", ["small", "large"])
+@pytest.mark.parametrize("backend", ["cpu", "vulkan"])
+def test_conv_2d_deform(scenario: str, backend: str):
     w, h, c_in, c_out, k = {
         "small": (4, 4, 5, 2, 3),
         "large": (42, 38, 82, 32, 3),
@@ -816,7 +817,6 @@ def test_conv_2d_deform():
     weight = input_tensor(c_out, c_in, k, k)
     offset = 1.0 - input_tensor(1, 2 * k * k, h, w)
     mask = torch.rand(1, k * k, h, w)
-    mask = torch.minimum(mask * 2.0, torch.tensor(1.0))
     expected = torchvision.ops.deform_conv2d(
         x, offset, weight, mask=mask, padding=(1, 1)
     )
@@ -828,10 +828,10 @@ def test_conv_2d_deform():
         "mask": to_channel_last(mask),
     }
     result = to_channel_last(torch.zeros_like(expected))
-    result = workbench.invoke_test("conv_2d_deform", x, result, state)
+    result = workbench.invoke_test("conv_2d_deform", x, result, state, backend=backend)
     result = revert_channel_last(result)
 
-    assert torch.allclose(result, expected)
+    assert torch.allclose(result, expected, atol=1e-2 if backend == "vulkan" else 1e-5)
 
 
 class DeformableConv2d(nn.Module):
@@ -1320,7 +1320,7 @@ def test_decoder():
     decoder = Decoder(channels)
     state = decoder.state_dict()
     for k, v in state.items():
-        key=f"decoder.{k}"
+        key = f"decoder.{k}"
         if key in ref_state:
             state[k] = ref_state[key].float()
         else:

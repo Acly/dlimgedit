@@ -208,29 +208,35 @@ def test_window_partition(backend: str):
 
 
 @pytest.mark.parametrize("shift", [(0, 2, -1, 0), (0, -2, 0, 3)])
-def test_roll(shift: tuple[int, int, int, int]):
+@pytest.mark.parametrize("backend", ["cpu", "vulkan"])
+def test_roll(shift: tuple[int, int, int, int], backend: str):
     x = torch.arange(4 * 5 * 6).reshape(1, 4, 5, 6).float()
     shifts = tuple(s for s in shift if s != 0)
     dims = tuple(i for i, s in enumerate(shift) if s != 0)
     expected = torch.roll(x, shifts=shifts, dims=dims)
 
     result = torch.zeros_like(expected)
-    result = workbench.invoke_test(f"roll_{shift}", x, result, {})
+    result = workbench.invoke_test(f"roll_{shift}", x, result, {}, backend=backend)
 
     assert torch.allclose(result, expected)
 
 
 @pytest.mark.parametrize(
-    "scenario", ["upscale_align_corners", "downscale_align_corners"]
+    "scenario", ["upscale_align_corners", "downscale_align_corners", "upscale_bilinear"]
 )
-def test_interpolate(scenario: str):
-    x = torch.arange(1 * 8 * 128 * 128).reshape(1, 8, 128, 128).float() / 10000.0
-    target_size = (258, 256) if scenario == "upscale_align_corners" else (62, 64)
+@pytest.mark.parametrize("backend", ["cpu", "vulkan"])
+def test_interpolate(scenario: str, backend: str):
+    w, h, c = (16, 16, 4)
+    x = torch.arange(1 * c * h * w).reshape(1, c, h, w).float() / 1000.0
+    target_size = (
+        (h // 2 - 2, w // 2) if "downscale" in scenario else (h * 2 + 2, w * 2)
+    )
+    align = "align_corners" in scenario
     expected = torch.nn.functional.interpolate(
-        x, size=target_size, mode="bilinear", align_corners=True
+        x, size=target_size, mode="bilinear", align_corners=align
     )
 
     result = torch.zeros_like(expected)
-    result = workbench.invoke_test(scenario, x, result, {})
+    result = workbench.invoke_test(scenario, x, result, {}, backend=backend)
 
     assert torch.allclose(result, expected)

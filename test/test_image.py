@@ -4,7 +4,6 @@ import torch
 
 from . import workbench
 
-from timeit import default_timer as timer
 
 ## Foreground estimation reference
 # from https://github.com/Photoroom/fast-foreground-estimation
@@ -44,9 +43,7 @@ def test_blur():
     r = 30
     image = np.random.rand(n, n, 4).astype(np.float32)
 
-    t = timer()
     expected = cv2.blur(image, (r * 2 + 1, r * 2 + 1), borderType=cv2.BORDER_REPLICATE)
-    print(f"OpenCV blur time: {timer() - t:.4f} seconds")
 
     result = torch.zeros(1, n, n, 4, dtype=torch.float32)
     image = torch.from_numpy(image).unsqueeze(0)

@@ -173,10 +173,16 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             w.output(layer_norm(m, input), output);
         } else if (name == "upscale_align_corners") {
             int mode = GGML_SCALE_MODE_BILINEAR | GGML_SCALE_ALIGN_CORNERS;
-            w.output(ggml_upscale_ext(m, input, 256, 258, 8, 1, mode), output);
+            w.output(ggml_upscale_ext(m, input, output.ne[0], output.ne[1], output.ne[2], 1, mode),
+                     output);
         } else if (name == "downscale_align_corners") {
             int mode = GGML_SCALE_MODE_BILINEAR | GGML_SCALE_ALIGN_CORNERS;
-            w.output(ggml_upscale_ext(m, input, 64, 62, 8, 1, mode), output);
+            w.output(ggml_upscale_ext(m, input, output.ne[0], output.ne[1], output.ne[2], 1, mode),
+                     output);
+        } else if (name == "upscale_bilinear") {
+            int mode = GGML_SCALE_MODE_BILINEAR;
+            w.output(ggml_upscale_ext(m, input, output.ne[0], output.ne[1], output.ne[2], 1, mode),
+                     output);
         } else if (name == "linear") {
             w.output(linear(m, input), output);
         } else if (name == "conv_2d_batch_norm") {
@@ -353,7 +359,7 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             auto img = std::span(reinterpret_cast<float4*>(input->data), ggml_nelements(input) / 4);
             auto alpha = std::span(reinterpret_cast<float*>(mask->data), ggml_nelements(mask));
             auto result = estimate_foreground(img, alpha, Extent{256, 256}, 30);
-            ASSERT(result.size() == output.size() * 4);
+            ASSERT(result.size() == output.size() / 4);
             memcpy(output.data, result.data(), output.size_bytes());
             return 0;
         } else {
