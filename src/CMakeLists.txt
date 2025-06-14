@@ -2,6 +2,7 @@ add_library(dlimgedit SHARED)
 
 target_sources(dlimgedit PRIVATE
   dlimgedit.cpp
+  birefnet.cpp
   environment.cpp
   image.cpp
   mobile_sam.cpp

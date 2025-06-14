@@ -23,7 +23,7 @@ using Tensor = ggml_tensor*;
 using Shape4 = std::array<int64_t, 4>;
 using std::byte;
 
-Shape4 nelements(Tensor t) { return {t->ne[0], t->ne[1], t->ne[2], t->ne[3]}; }
+inline Shape4 nelements(Tensor t) { return {t->ne[0], t->ne[1], t->ne[2], t->ne[3]}; }
 
 enum class GGMLBackend { cpu = 1, vulkan = 2 };
 
@@ -285,12 +285,12 @@ struct ModelRef {
     operator ggml_context*() { return graph_context; }
 };
 
-void set_tensor_data(Tensor tensor, std::span<float> data) {
+inline void set_tensor_data(Tensor tensor, std::span<float> data) {
     ASSERT(ggml_nbytes(tensor) == data.size_bytes());
     ggml_backend_tensor_set(tensor, data.data(), 0, ggml_nbytes(tensor));
 }
 
-void load_tensor_data(Tensor tensor, Path const& filepath) {
+inline void load_tensor_data(Tensor tensor, Path const& filepath) {
     std::ifstream file(filepath, std::ios::binary);
     if (!file) {
         throw std::runtime_error(fmt::format("Failed to open file: {}", filepath.string()));
