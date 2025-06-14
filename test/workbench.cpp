@@ -1,5 +1,6 @@
 #include "birefnet.hpp"
 #include "mobile_sam.hpp"
+#include "migan.hpp"
 
 #include <fmt/format.h>
 #include <ggml-blas.h>
@@ -362,6 +363,8 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             ASSERT(result.size() == output.size() / 4);
             memcpy(output.data, result.data(), output.size_bytes());
             return 0;
+        } else if (name == "migan_lrelu_agc") {
+            w.output(migan::lrelu_agc(m, input, 0.2f, std::sqrtf(2), 1.0f), output);
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }
