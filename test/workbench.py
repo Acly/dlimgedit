@@ -92,6 +92,8 @@ def input_tensor(*shape: tuple[int]):
 
 
 def input_like(tensor: torch.Tensor):
+    if tensor.dim() == 0:
+        return torch.tensor(0.5, dtype=tensor.dtype)
     return input_tensor(*tensor.shape)
 
 

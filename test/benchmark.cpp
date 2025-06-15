@@ -626,8 +626,11 @@ int main(int argc, char** argv) {
         } else if (arg1 == "conv_transpose_2d") {
             dlimg::test_conv_transpose_2d(argv[2]);
         } else if (arg1 == "birefnet") {
-            dlimg::run_birefnet("script/.ggml/birefnet_lite-fp16.gguf", "test/input/cat_and_hat.png",
-                                "test/result/birefnet_ggml", dlimg::GGMLBackend::cpu);
+            auto backend = argc > 2 && std::string_view(argv[2]) == "vulkan"
+                               ? dlimg::GGMLBackend::vulkan
+                               : dlimg::GGMLBackend::cpu;
+            dlimg::run_birefnet("script/.ggml/birefnet-fp16.gguf",
+                                "test/input/cat_and_hat.png", "test/result/birefnet_ggml", backend);
         } else if (arg1 == "vulkan") {
             dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
                                  dlimg::Region{dlimg::Point{180, 110}, dlimg::Extent{325, 220}},

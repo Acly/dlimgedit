@@ -945,7 +945,8 @@ def add_variance_epsilon(state: dict[str, torch.Tensor], epsilon=1e-5):
     return {k: v for k, v in state.items() if "num_batches_tracked" not in k}
 
 
-def test_global_avg_pool():
+@pytest.mark.parametrize("backend", ["cpu", "vulkan"])
+def test_global_avg_pool(backend: str):
     pool = GlobalAvgPool(3)
     state = generate_state(pool.state_dict())
     pool.load_state_dict(state)
@@ -957,7 +958,9 @@ def test_global_avg_pool():
     state = convert_to_channel_last(state, key="1.weight")
     x = to_channel_last(x)
     result = to_channel_last(torch.zeros_like(expected))
-    result = workbench.invoke_test("biref_global_avg_pool", x, result, state)
+    result = workbench.invoke_test(
+        "biref_global_avg_pool", x, result, state, backend=backend
+    )
     result = revert_channel_last(result)
 
     assert torch.allclose(result, expected)

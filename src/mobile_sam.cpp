@@ -52,6 +52,11 @@ Tensor depthwise_conv_2d(ModelRef m, Tensor x, int stride, int pad) {
     x = ggml_permute(m, x, 2, 0, 1, 3);
     x = ggml_conv_2d_dw_direct(m, weight, x, stride, stride, pad, pad, 1, 1);
     x = ggml_permute(m, x, 1, 2, 0, 3);
+    
+    if (Tensor bias = m.find("bias")) {
+        bias = ggml_reshape_4d(m, bias, bias->ne[0], 1, 1, 1);
+        x = ggml_add_inplace(m, x, bias);
+    }
     return x;
 }
 
