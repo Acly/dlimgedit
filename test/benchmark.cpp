@@ -4,7 +4,6 @@
 #include "mobile_sam.hpp"
 #include <dlimgedit/dlimgedit.hpp>
 
-
 #include <fmt/format.h>
 #include <ggml-alloc.h>
 #include <ggml-backend.h>
@@ -296,7 +295,6 @@ void run_birefnet(Path const& model_path, Path const& input_path, Path const& ou
 
 void run_migan(Path const& model_path, Path const& image_path, Path const& mask_path,
                Path const& output_path, GGMLBackend backend) {
-    auto time = std::chrono::steady_clock::now();
     int resolution = 512;
     auto input_image = Image::load(image_path.string().c_str());
     auto mask_image = Image::load(mask_path.string().c_str());
@@ -321,18 +319,23 @@ void run_migan(Path const& model_path, Path const& image_path, Path const& mask_
     graph.allocate();
     set_tensor_data(x, image_data);
 
-    graph.compute(backend_);
+    auto time = std::chrono::steady_clock::now();
 
-    std::vector<float> output_data(ggml_nelements(result));
-    ggml_backend_tensor_get(result, output_data.data(), 0, ggml_nbytes(result));
-    auto output_image = migan::postprocess(output_data, input_image.extent());
-    auto output_path_str = fmt::format("{}_output.png", output_path.string());
-    Image::save(output_image, output_path_str.c_str());
-    fmt::print("Saved to {}\n", output_path_str);
+    graph.compute(backend_);
 
     auto time_end = std::chrono::steady_clock::now();
     fmt::print("MIGAN processing time: {}ms\n",
                std::chrono::duration_cast<std::chrono::milliseconds>(time_end - time).count());
+
+    std::vector<float> output_data(ggml_nelements(result));
+    ggml_backend_tensor_get(result, output_data.data(), 0, ggml_nbytes(result));
+    Image output_image = migan::postprocess(output_data, input_image.extent());
+    Image composited(input_image.extent(), Channels::rgb);
+    alpha_composite(output_image, input_image, mask_image, composited.pixels());
+
+    auto output_path_str = fmt::format("{}_output.png", output_path.string());
+    Image::save(composited, output_path_str.c_str());
+    fmt::print("Saved to {}\n", output_path_str);
 }
 
 struct ggml_tensor* ggml_conv_2d_dw_f32(struct ggml_context* ctx, struct ggml_tensor* a,

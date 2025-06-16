@@ -199,4 +199,28 @@ std::vector<float4> estimate_foreground(std::span<float4> img, std::span<float> 
     return blur_fusion_foreground_estimator(img, fg, blur_bg, mask, extent, 3).first;
 }
 
+void alpha_composite(ImageView const& fg, ImageView const& bg, ImageView const& mask,
+                     uint8_t* dst) {
+    ASSERT(fg.extent == bg.extent && fg.extent == mask.extent);
+
+    PixelAccessor a(fg);
+    PixelAccessor b(bg);
+    PixelAccessor alpha(mask);
+
+    auto comp = [&](int x, int y, int c, float w0, float w1) {
+        return uint8_t(a.get(fg.pixels, x, y, c) * w0 + b.get(bg.pixels, x, y, c) * w1);
+    };
+
+    for (int y = 0; y < fg.extent.height; ++y) {
+        for (int x = 0; x < fg.extent.width; ++x) {
+            int i = y * fg.extent.width * 3 + x * 3;
+            float w0 = alpha.get(mask.pixels, x, y, 0) / 255.0f;
+            float w1 = 1.0f - w0;
+            for (int c = 0; c < 3; ++c) {
+                dst[i + c] = comp(x, y, c, w0, w1);
+            }
+        }
+    }
+}
+
 } // namespace dlimg

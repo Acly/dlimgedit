@@ -53,7 +53,7 @@ void resize_mask(ImageView const&, Extent target, uint8_t* output);
 struct PixelAccessor {
     int stride_x;
     int stride_c;
-    std::array<int, 3> channel_map;
+    std::array<int, 4> channel_map;
 
     PixelAccessor(ImageView image) : PixelAccessor(image.extent, image.channels) {}
 
@@ -62,16 +62,16 @@ struct PixelAccessor {
         stride_x = extent.width * stride_c;
         switch (channels) {
         case Channels::bgra:
-            channel_map = {2, 1, 0};
+            channel_map = {2, 1, 0, 3};
             break;
         case Channels::argb:
-            channel_map = {1, 2, 3};
+            channel_map = {1, 2, 3, 0};
             break;
         case Channels::mask:
-            channel_map = {0, 0, 0};
+            channel_map = {0, 0, 0, 0};
             break;
         default:
-            channel_map = {0, 1, 2};
+            channel_map = {0, 1, 2, 3};
             break;
         }
     }
@@ -97,5 +97,7 @@ void blur(std::span<float4> src, std::span<float4> dst, Extent extent, int radiu
 
 std::vector<float4> estimate_foreground(std::span<float4> img, std::span<float> mask, Extent extent,
                                         int radius = 30);
+
+void alpha_composite(ImageView const& fg, ImageView const& bg, ImageView const& mask, uint8_t* dst);
 
 } // namespace dlimg
