@@ -20,7 +20,7 @@ in_filepath = sys.argv[1]
 out_dir = sys.argv[2]
 convert_fp16 = len(sys.argv) > 3 and sys.argv[3] == "fp16"
 
-out_filename = Path(in_filepath).name.lower().replace(".safetensors", "")
+out_filename = Path(in_filepath).name.lower().replace(".pt", "")
 if convert_fp16:
     out_filename += "-fp16"
 out_filename += ".gguf"

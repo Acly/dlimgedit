@@ -372,6 +372,14 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
         } else if (name == "migan_separable_conv_2d") {
             auto flags = migan::conv::noise | migan::conv::activation;
             w.output(migan::separable_conv_2d(m, input, flags), output);
+        } else if (name == "migan_encoder") {
+            w.output(migan::encode(m, input, 16).first, output);
+        } else if (name == "migan_synthesis") {
+            migan::Features feats;
+            feats[0] = m.weights("feat16");
+            feats[1] = m.weights("feat8");
+            feats[2] = m.weights("feat4");
+            w.output(migan::synthesis(m, input, feats, 16), output);
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }

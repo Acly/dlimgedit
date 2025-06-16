@@ -87,10 +87,11 @@ void image_to_float(ImageView const& img, std::span<float> dst, int n_channels, 
     }
 }
 
-void image_from_float(std::span<float const> src, std::span<uint8_t> dst) {
+void image_from_float(std::span<float const> src, std::span<uint8_t> dst, float scale,
+                      float offset) {
     ASSERT(src.size() == dst.size());
     for (size_t i = 0; i < src.size(); ++i) {
-        float value = std::clamp(src[i] * 255.0f, 0.0f, 255.0f);
+        float value = 255.0f * std::clamp(src[i] * scale + offset, 0.0f, 1.0f);
         dst[i] = uint8_t(value);
     }
 }

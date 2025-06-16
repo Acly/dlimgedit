@@ -245,21 +245,18 @@ struct ModelRef {
         return ModelRef{weights_context, graph_context, graph, prefix, backend};
     }
 
-    ModelRef operator[](char const* sub_module) const {
+    template <typename Stringable>
+    ModelRef chain_prefix(Stringable sub_module) const {
         if (prefix) {
-            return with_prefix(TensorName("{}.{}", prefix.c_str(), sub_module));
+            return with_prefix(TensorName("{}.{}", prefix.view(), sub_module));
         } else {
-            return with_prefix(TensorName(sub_module));
+            return with_prefix(TensorName("{}", sub_module));
         }
     }
 
-    ModelRef operator[](int index) const {
-        if (prefix) {
-            return with_prefix(TensorName("{}.{}", prefix.view(), index));
-        } else {
-            return with_prefix(TensorName("{}", index));
-        }
-    }
+    ModelRef operator[](char const* sub_module) const { return chain_prefix(sub_module); }
+    ModelRef operator[](TensorName sub_module) const { return chain_prefix(sub_module.view()); }
+    ModelRef operator[](int sub_module) const { return chain_prefix(sub_module); }
 
     void add_tensor(char const* name, Tensor tensor) const {
         auto full_name = TensorName();

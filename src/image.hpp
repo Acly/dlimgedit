@@ -89,7 +89,8 @@ void image_to_float(ImageView const& img, std::span<float> dst, int n_channels =
                     float4 mean = float4(0.0f, 0.0f, 0.0f, 0.0f),
                     float4 std = float4(255.0f, 255.0f, 255.0f, 255.0f));
 
-void image_from_float(std::span<float const> src, std::span<uint8_t> dst);
+void image_from_float(std::span<float const> src, std::span<uint8_t> dst, float scale = 1,
+                      float offset = 0);
 
 void blur(std::span<float> src, std::span<float> dst, Extent extent, int radius);
 void blur(std::span<float4> src, std::span<float4> dst, Extent extent, int radius);

@@ -1,7 +1,9 @@
 #include "birefnet.hpp"
 #include "image.hpp"
+#include "migan.hpp"
 #include "mobile_sam.hpp"
 #include <dlimgedit/dlimgedit.hpp>
+
 
 #include <fmt/format.h>
 #include <ggml-alloc.h>
@@ -290,6 +292,47 @@ void run_birefnet(Path const& model_path, Path const& input_path, Path const& ou
         Image::save(output_image_rgba, output_path_rgba.c_str());
         fmt::print("Saved to {}\n", output_path_rgba);
     }
+}
+
+void run_migan(Path const& model_path, Path const& image_path, Path const& mask_path,
+               Path const& output_path, GGMLBackend backend) {
+    auto time = std::chrono::steady_clock::now();
+    int resolution = 512;
+    auto input_image = Image::load(image_path.string().c_str());
+    auto mask_image = Image::load(mask_path.string().c_str());
+    auto image_data = migan::preprocess(input_image, mask_image, resolution, true);
+
+    Backend_ backend_ = Backend_::init(backend);
+    Model model = Model::load(model_path, backend_);
+    model.allocate();
+
+    Graph graph = Graph::create(backend_, GGML_DEFAULT_GRAPH_SIZE);
+    ModelRef m = ModelRef(model, graph);
+
+    Tensor x = ggml_new_tensor_4d(m, GGML_TYPE_F32, 4, resolution, resolution, 1);
+    ggml_set_name(x, "input");
+    ggml_set_input(x);
+
+    Tensor result = migan::run(m, x, resolution);
+    ggml_set_name(result, "output");
+    ggml_set_output(result);
+    ggml_build_forward_expand(graph.graph, result);
+
+    graph.allocate();
+    set_tensor_data(x, image_data);
+
+    graph.compute(backend_);
+
+    std::vector<float> output_data(ggml_nelements(result));
+    ggml_backend_tensor_get(result, output_data.data(), 0, ggml_nbytes(result));
+    auto output_image = migan::postprocess(output_data, input_image.extent());
+    auto output_path_str = fmt::format("{}_output.png", output_path.string());
+    Image::save(output_image, output_path_str.c_str());
+    fmt::print("Saved to {}\n", output_path_str);
+
+    auto time_end = std::chrono::steady_clock::now();
+    fmt::print("MIGAN processing time: {}ms\n",
+               std::chrono::duration_cast<std::chrono::milliseconds>(time_end - time).count());
 }
 
 struct ggml_tensor* ggml_conv_2d_dw_f32(struct ggml_context* ctx, struct ggml_tensor* a,
@@ -629,8 +672,14 @@ int main(int argc, char** argv) {
             auto backend = argc > 2 && std::string_view(argv[2]) == "vulkan"
                                ? dlimg::GGMLBackend::vulkan
                                : dlimg::GGMLBackend::cpu;
-            dlimg::run_birefnet("script/.ggml/birefnet-fp16.gguf",
-                                "test/input/cat_and_hat.png", "test/result/birefnet_ggml", backend);
+            dlimg::run_birefnet("script/.ggml/birefnet-fp16.gguf", "test/input/cat_and_hat.png",
+                                "test/result/birefnet_ggml", backend);
+        } else if (arg1 == "migan") {
+            auto backend = argc > 2 && std::string_view(argv[2]) == "vulkan"
+                               ? dlimg::GGMLBackend::vulkan
+                               : dlimg::GGMLBackend::cpu;
+            dlimg::run_migan("script/.ggml/migan_512_places2.gguf", "test/input/inpaint_image.png",
+                             "test/input/inpaint_mask.png", "test/result/migan_ggml", backend);
         } else if (arg1 == "vulkan") {
             dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
                                  dlimg::Region{dlimg::Point{180, 110}, dlimg::Extent{325, 220}},
