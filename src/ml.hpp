@@ -315,4 +315,45 @@ struct TensorAlloc {
     }
 };
 
+struct slice_t {
+    int64_t begin;
+    int64_t end;
+    int64_t step;
+
+    static constexpr int64_t max = std::numeric_limits<int64_t>::max();
+
+    constexpr slice_t() : begin(0), end(max), step(1) {}
+
+    constexpr slice_t(int64_t index) : begin(index), end(index + 1), step(1) {}
+
+    constexpr slice_t(int64_t begin, int64_t end, int64_t step = 1)
+        : begin(begin), end(end), step(step) {
+        ASSERT(step > 0 && "Slice step must be positive");
+    }
+};
+
+inline Tensor slice(ggml_context* ctx, Tensor x, slice_t s0, slice_t s1 = {}, slice_t s2 = {},
+                    slice_t s3 = {}) {
+    ASSERT(s0.step == 1 && "Slice step must be 1 for the begin dimension");
+
+    auto ne = std::array{x->ne[0], x->ne[1], x->ne[2], x->ne[3]};
+    auto nb = std::array{x->nb[0], x->nb[1], x->nb[2], x->nb[3]};
+    auto slices = std::array{s0, s1, s2, s3};
+    size_t offset = 0;
+
+    for (int dim = 0; dim < 4; ++dim) {
+        auto [begin, end, step] = slices[dim];
+        end = end == slice_t::max ? x->ne[dim] : end;
+        end = end < 0 ? x->ne[dim] + end : end;
+        begin = begin < 0 ? x->ne[dim] + begin : begin;
+        ASSERT(begin >= 0 && end <= x->ne[dim] && "Slice indices out of bounds");
+        ASSERT(begin < end && "Begin index must be less than end index");
+
+        ne[dim] = (end - begin + step - 1) / step;
+        nb[dim] = x->nb[dim] * step;
+        offset += begin * x->nb[dim];
+    }
+    return ggml_view_4d(ctx, x, ne[0], ne[1], ne[2], ne[3], nb[1], nb[2], nb[3], offset);
+}
+
 } // namespace dlimg

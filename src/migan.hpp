@@ -55,13 +55,12 @@ Tensor upsample_2d(ModelRef m, Tensor x) {
     Tensor filter_const = m.weights("filter_const");
     filter_const = ggml_reshape_4d(m, filter_const, 1, filter_const->ne[0], filter_const->ne[1], 1);
 
-    x = ggml_upscale_ext(
-        m, x, x->ne[0], x->ne[1] * 2, x->ne[2] * 2, x->ne[3], GGML_SCALE_MODE_NEAREST);
+    auto [c, w, h, b] = nelements(x);
+    x = ggml_upscale_ext(m, x, c, w * 2, h * 2, b, GGML_SCALE_MODE_NEAREST);
     x = ggml_mul_inplace(m, x, filter_const);
-    x = depthwise_conv_2d(m["filter"], x, 1, 2);
-    x = ggml_view_4d(
-        m, x, x->ne[0], x->ne[1] - 1, x->ne[2] - 1, x->ne[3], x->nb[1], x->nb[2], x->nb[3], 0);
-    x = ggml_cont(m, x); // currently required by subsequent ggml_scale
+    x = depthwise_conv_2d(m["filter"], x, 1, 2); // 4x4 filter
+    x = slice(m, x, {}, {0, -1}, {0, -1}, {});   // remove padding from right and bottom
+    x = ggml_cont(m, x); // required by subsequent ggml_scale for some reason
     return m.named(x);
 }
 

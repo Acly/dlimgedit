@@ -152,7 +152,7 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
         ggml_set_name(point_coords, "point_coords");
         ggml_set_input(point_coords);
 
-        // auto prompt_embeddings = sam::embed_points(model["prompt_encoder"], point_coords);
+        //auto prompt_embeddings = sam::embed_points(m["prompt_encoder"], point_coords);
         auto prompt_embeddings = sam::embed_box(m["prompt_encoder"], point_coords);
         ggml_set_name(prompt_embeddings, "sparse_prompt");
         auto dense_prompt = sam::no_mask_embed(m["prompt_encoder"]);

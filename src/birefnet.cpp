@@ -84,10 +84,8 @@ Tensor window_attention(ModelRef m, Tensor x, Tensor mask, int num_heads, int wi
     qkv = ggml_reshape_4d(m, qkv, c / num_heads, num_heads, 3, n * b);
     qkv = ggml_cont(m, ggml_permute(m, qkv, 0, 1, 3, 2));
 
-    size_t offset = qkv->nb[3];
     auto split = [=](Tensor tensor, size_t index, bool transpose = false) mutable {
-        tensor = ggml_view_3d(m, tensor, c / num_heads, num_heads, n * b, tensor->nb[1],
-                              tensor->nb[2], offset * index);
+        tensor = slice(m, tensor, {}, {}, {}, index);
         tensor = ggml_reshape_4d(m, tensor, c / num_heads, num_heads, n, b);
         if (transpose) {
             tensor = ggml_cont(m, ggml_permute(m, tensor, 1, 2, 0, 3));
@@ -157,9 +155,8 @@ Tensor swin_block(ModelRef m, Tensor x, Tensor mask, SwinBlockParams const& p) {
     }
 
     if (pad_r > 0 || pad_b > 0) { // undo padding
-        size_t nb1 = x->nb[0] * c;
-        x = ggml_view_4d(
-            m, x, c, w, h, b, nb1, nb1 * (w + pad_r), nb1 * (w + pad_r) * (h + pad_b), 0);
+        x = ggml_reshape_4d(m, x, c, w + pad_r, h + pad_b, b);
+        x = slice(m, x, {}, {0, w}, {0, h}, {});
         x = ggml_cont(m, x);
     }
 
@@ -179,13 +176,10 @@ Tensor patch_merging(ModelRef m, Tensor x, int w, int h) {
     ASSERT(w % 2 == 0 && h % 2 == 0 && "Expecting even spatial dimensions");
 
     x = ggml_reshape_4d(m, x, c, w, h, b);
-    Tensor x0 = ggml_view_4d(m, x, c, w / 2, h / 2, b, x->nb[1] * 2, x->nb[2] * 2, x->nb[3], 0);
-    Tensor x1 = ggml_view_4d(
-        m, x, c, w / 2, h / 2, b, x->nb[1] * 2, x->nb[2] * 2, x->nb[3], x->nb[2]);
-    Tensor x2 = ggml_view_4d(
-        m, x, c, w / 2, h / 2, b, x->nb[1] * 2, x->nb[2] * 2, x->nb[3], x->nb[1]);
-    Tensor x3 = ggml_view_4d(
-        m, x, c, w / 2, h / 2, b, x->nb[1] * 2, x->nb[2] * 2, x->nb[3], x->nb[1] + x->nb[2]);
+    Tensor x0 = slice(m, x, {}, {0, w, 2}, {0, h, 2}, {});
+    Tensor x1 = slice(m, x, {}, {0, w, 2}, {1, h, 2}, {});
+    Tensor x2 = slice(m, x, {}, {1, w, 2}, {0, h, 2}, {});
+    Tensor x3 = slice(m, x, {}, {1, w, 2}, {1, h, 2}, {});
     x = ggml_concat(m, x0, x1, 0);
     x = ggml_concat(m, x, x2, 0);
     x = ggml_concat(m, x, x3, 0);

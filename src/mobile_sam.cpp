@@ -132,12 +132,11 @@ Tensor window_reverse(ModelRef m, Tensor x, int w, int h, int window) {
     int64_t py = (window - h % window) % window;
     int64_t npw = (w + px) / window;
     int64_t nph = (h + py) / window;
-    int64_t nb0 = x->nb[0];
 
     x = ggml_reshape_4d(m, x, c * window, window, npw, nph * b);
     x = ggml_cont(m, ggml_permute(m, x, 0, 2, 1, 3));
-    x = ggml_view_4d(
-        m, x, c, w, h, b, nb0 * c, nb0 * c * (w + px), nb0 * c * (w + px) * (h + py), 0);
+    x = ggml_reshape_4d(m, x, c, w + px, h + py, b);
+    x = slice(m, x, {}, {0, w}, {0, h});
     x = ggml_cont(m, x);
     return x;
 }
@@ -244,11 +243,8 @@ Tensor attention_rel_bias(ModelRef m, Tensor x, int dim, int num_heads) {
     qkv = ggml_reshape_4d(m, qkv, key_dim, 3, num_heads * n, b);
     qkv = ggml_cont(m, ggml_permute(m, qkv, 0, 3, 1, 2)); // ne = [key_dim, num_heads * n, b, 3]
 
-    // split([key_dim, key_dim, key_dim], dim=3)
-    size_t offset = qkv->nb[3];
-    auto split = [=](ModelRef m, Tensor tensor, size_t index) {
-        tensor = ggml_view_3d(
-            m, tensor, key_dim, num_heads * n, b, tensor->nb[1], tensor->nb[2], index * offset);
+    auto split = [=](ModelRef m, Tensor tensor, int64_t index) {
+        tensor = slice(m, tensor, {}, {}, {}, index);
         tensor = ggml_reshape_4d(m, tensor, key_dim, num_heads, n, b);
         return tensor;
     };
@@ -383,12 +379,12 @@ Tensor embed_points(ModelRef m, Tensor coords) {
     Tensor x = position_embedding_random(m["pe_layer"], coords);
 
     // Write "not_a_point_embed" value into the last coordinate
-    Tensor label_end = ggml_view_2d(m, x, x->ne[0], 1, x->nb[1], /*offset*/ count * x->nb[1]);
+    Tensor label_end = slice(m, x, {}, count);
     label_end = ggml_cpy(m, m.weights("not_a_point_embed.weight"), label_end);
     ggml_build_forward_expand(m.graph, label_end);
 
     // Add point_embeddings[1] weight to all foreground points (prior coordinates)
-    Tensor label_one = ggml_view_2d(m, x, x->ne[0], count, x->nb[1], /* offset */ 0);
+    Tensor label_one = slice(m, x, {}, {0, count});
     label_one = ggml_add_inplace(m, label_one, m.weights("point_embeddings.1.weight"));
     ggml_build_forward_expand(m.graph, label_one);
 
@@ -402,11 +398,11 @@ Tensor embed_box(ModelRef m, Tensor coords) {
     Tensor x = position_embedding_random(m["pe_layer"], coords);
 
     // Add point_embeddings[2] to the first corner and point_embeddings[3] to the second corner
-    Tensor corner1 = ggml_view_2d(m, x, x->ne[0], 1, x->nb[1], /* offset */ 0);
+    Tensor corner1 = slice(m, x, {}, 0);
     corner1 = ggml_add_inplace(m, corner1, m.weights("point_embeddings.2.weight"));
     ggml_build_forward_expand(m.graph, corner1);
 
-    Tensor corner2 = ggml_view_2d(m, x, x->ne[0], 1, x->nb[1], /* offset */ x->nb[1]);
+    Tensor corner2 = slice(m, x, {}, 1);
     corner2 = ggml_add_inplace(m, corner2, m.weights("point_embeddings.3.weight"));
     ggml_build_forward_expand(m.graph, corner2);
 
@@ -584,9 +580,7 @@ MaskPrediction predict_masks(ModelRef m, Tensor image_embeddings, Tensor sparse_
     auto [hs, out] = two_way_transformer(
         m["transformer"], src, pos_src, tokens, transformer_depth, num_heads);
     Tensor iou_token_out = ggml_view_2d(m, hs, hs->ne[0], hs->ne[2], hs->nb[2], 0);
-    Tensor mask_tokens_out = ggml_view_3d(m, hs, hs->ne[0], num_mask_tokens, hs->ne[2], hs->nb[1],
-                                          num_mask_tokens * hs->nb[1],
-                                          /* offset */ hs->nb[1]);
+    Tensor mask_tokens_out = slice(m, hs, {}, {1, num_mask_tokens + 1}, {});
 
     // Upscale mask embeddings and predict masks using the mask tokens
     out = ggml_reshape_4d(m, out, c_low, w_low, h_low, b);
@@ -599,9 +593,9 @@ MaskPrediction predict_masks(ModelRef m, Tensor image_embeddings, Tensor sparse_
     Tensor hyper_in = ggml_new_tensor_3d(
         m, GGML_TYPE_F32, transformer_out_dim, num_mask_tokens, mask_tokens_out->ne[2]);
     for (int i = 0; i < num_mask_tokens; ++i) {
-        Tensor mask_slice = slice_2d(m, mask_tokens_out, i, 1);
+        Tensor mask_slice = slice(m, mask_tokens_out, {}, i);
         mask_slice = hypernetwork_mlp(mlps[i], mask_slice, 3);
-        Tensor dest_slice = slice_2d(m, hyper_in, i, 1);
+        Tensor dest_slice = slice(m, hyper_in, {}, i);
         dest_slice = ggml_cpy(m, mask_slice, dest_slice);
         ggml_build_forward_expand(m.graph, dest_slice);
     }
