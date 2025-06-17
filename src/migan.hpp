@@ -159,12 +159,29 @@ Tensor synthesis(ModelRef m, Tensor x_in, Features feats, int res) {
     return img;
 }
 
-Tensor run(ModelRef m, Tensor image, int res) {
-    auto [x, feats] = encode(m["encoder"], image, res);
-    return synthesis(m["synthesis"], x, feats, res);
+struct MIGANParams {
+    int resolution = 256;
+    bool invert_mask = false;
+
+    static MIGANParams detect(ModelRef m) {
+        if (m.find("encoder.b512.fromrgb.weight") != nullptr) {
+            return MIGANParams{512};
+        } else if (m.find("encoder.b256.fromrgb.weight") != nullptr) {
+            return MIGANParams{256};
+        } else {
+            throw std::runtime_error("Failed to detect model parameters");
+        }
+    }
+};
+
+Tensor generate(ModelRef m, Tensor image, MIGANParams const& p) {
+    auto [x, feats] = encode(m["encoder"], image, p.resolution);
+    Tensor result = synthesis(m["synthesis"], x, feats, p.resolution);
+    return mark_output(m, result, "output");
 }
 
-std::vector<float> preprocess(ImageView image, ImageView mask, int res, bool invert_mask = false) {
+std::vector<float> preprocess(ImageView image, ImageView mask, MIGANParams const& p) {
+    int res = p.resolution;
     std::optional<Image> resized_image;
     if (image.extent.width != res || image.extent.height != res) {
         resized_image = resize(image, Extent(res, res));
@@ -178,7 +195,7 @@ std::vector<float> preprocess(ImageView image, ImageView mask, int res, bool inv
     PixelAccessor rgb(image);
     PixelAccessor alpha(mask);
     const float scale = 2.0f / 255.0f;
-    const uint8_t no_fill = invert_mask ? 0 : 255;
+    const uint8_t no_fill = p.invert_mask ? 0 : 255;
     std::vector<float> result(4 * res * res);
 
     for (int y = 0; y < res; ++y) {
@@ -194,10 +211,11 @@ std::vector<float> preprocess(ImageView image, ImageView mask, int res, bool inv
     return result;
 }
 
-Image postprocess(std::span<float> data, Extent extent) {
-    auto image = Image(Extent(512, 512), Channels::rgb);
+Image postprocess(std::span<float> data, Extent extent, MIGANParams const& p) {
+    int res = p.resolution;
+    auto image = Image(Extent(res, res), Channels::rgb);
     image_from_float(data, std::span(image.pixels(), data.size()), 0.5f, 0.5f);
-    if (extent.width != 512 || extent.height != 512) {
+    if (extent.width != res || extent.height != res) {
         return resize(image, extent);
     }
     return image;

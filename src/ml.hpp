@@ -192,9 +192,11 @@ struct Graph {
             throw std::runtime_error("Failed to allocate buffer for graph");
         }
     }
-
-    void compute(Backend_ const& backend) const { ggml_backend_graph_compute(backend, graph); }
 };
+
+inline void compute(Backend_ const& backend, Graph const& graph) {
+    ggml_backend_graph_compute(backend, graph.graph);
+}
 
 struct ModelRef {
     ggml_context* weights_context = nullptr;
@@ -258,22 +260,6 @@ struct ModelRef {
     ModelRef operator[](TensorName sub_module) const { return chain_prefix(sub_module.view()); }
     ModelRef operator[](int sub_module) const { return chain_prefix(sub_module); }
 
-    void add_tensor(char const* name, Tensor tensor) const {
-        auto full_name = TensorName();
-        if (prefix) {
-            name = full_name.format("{}.{}", prefix.c_str(), name);
-        }
-        ggml_set_name(tensor, name);
-    }
-
-    void create_tensor(char const* name, Shape4 shape, std::span<float> data) {
-        auto tensor = ggml_new_tensor_4d(
-            weights_context, GGML_TYPE_F32, shape[3], shape[2], shape[1], shape[0]);
-        GGML_ASSERT(ggml_nbytes(tensor) == data.size_bytes());
-        tensor->data = reinterpret_cast<void*>(data.data());
-        add_tensor(name, tensor);
-    }
-
     Tensor named(Tensor tensor) {
         ggml_set_name(tensor, prefix.c_str());
         return tensor;
@@ -281,6 +267,20 @@ struct ModelRef {
 
     operator ggml_context*() { return graph_context; }
 };
+
+inline Tensor create_input(ModelRef m, TensorName name, ggml_type type, Shape4 shape) {
+    Tensor tensor = ggml_new_tensor_4d(m, type, shape[0], shape[1], shape[2], shape[3]);
+    ggml_set_name(tensor, name.c_str());
+    ggml_set_input(tensor);
+    return tensor;
+}
+
+inline Tensor mark_output(ModelRef m, Tensor x, TensorName name) {
+    ggml_set_name(x, name.c_str());
+    ggml_set_output(x);
+    ggml_build_forward_expand(m.graph, x);
+    return x;
+}
 
 inline void set_tensor_data(Tensor tensor, std::span<float> data) {
     ASSERT(ggml_nbytes(tensor) == data.size_bytes());
@@ -299,6 +299,14 @@ inline void load_tensor_data(Tensor tensor, Path const& filepath) {
             fmt::format("Failed to read data from file: {}", filepath.string()));
     }
     set_tensor_data(tensor, data);
+}
+
+template <typename T>
+inline std::vector<T> get_tensor_data(Tensor tensor) {
+    ASSERT(ggml_nelements(tensor) * sizeof(T) == ggml_nbytes(tensor));
+    std::vector<T> data(ggml_nelements(tensor));
+    ggml_backend_tensor_get(tensor, data.data(), 0, ggml_nbytes(tensor));
+    return data;
 }
 
 template <typename T>

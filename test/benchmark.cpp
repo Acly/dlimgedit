@@ -113,26 +113,21 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
         Graph embed_graph = Graph::create(backend);
         ModelRef m = ModelRef(model, embed_graph);
 
-        Tensor x = ggml_new_tensor_4d(m, GGML_TYPE_F32, 3, 1024, 1024, 1);
-        ggml_set_name(x, "input");
+        Tensor x = create_input(m, "input", GGML_TYPE_F32, {3, 1024, 1024, 1});
 
         Tensor image_embeddings = sam::tiny_vit(m["enc"], x, sam::TinyViTParams{});
-        ggml_set_name(image_embeddings, "image_embeddings");
-        ggml_build_forward_expand(embed_graph.graph, image_embeddings);
+        mark_output(m, image_embeddings, "image_embeddings");
 
         embed_graph.allocate();
         set_tensor_data(x, image_data);
 
-        embed_graph.compute(backend);
+        compute(backend, embed_graph);
 
         time_first_run = std::chrono::steady_clock::now();
 
         time_second_run = std::chrono::steady_clock::now();
 
-        image_embeddings_data.resize(ggml_nelements(image_embeddings));
-        ggml_backend_tensor_get(
-            image_embeddings, image_embeddings_data.data(), 0, ggml_nbytes(image_embeddings));
-        // print_tensor(image_embeddings);
+        image_embeddings_data = get_tensor_data<float>(image_embeddings);
     }
 
     auto time_image_embed = std::chrono::steady_clock::now();
@@ -144,38 +139,27 @@ void run_sam_ggml2(Path const& model_path, Path const& input_path, dlimg::Region
         Graph decode_graph = Graph::create(backend);
         ModelRef m = ModelRef(model, decode_graph);
 
-        Tensor image_embeddings = ggml_new_tensor_4d(m, GGML_TYPE_F32, 256, 64, 64, 1);
-        ggml_set_name(image_embeddings, "image_embeddings");
-        ggml_set_input(image_embeddings);
+        Tensor img_embeddings = create_input(
+            m, "image_embeddings", GGML_TYPE_F32, {256, 64, 64, 1});
+        Tensor point_coords = create_input(m, "point_coords", GGML_TYPE_F32, {2, 2, 1, 1});
 
-        Tensor point_coords = ggml_new_tensor_2d(m, GGML_TYPE_F32, 2, 2);
-        ggml_set_name(point_coords, "point_coords");
-        ggml_set_input(point_coords);
-
-        //auto prompt_embeddings = sam::embed_points(m["prompt_encoder"], point_coords);
+        // auto prompt_embeddings = sam::embed_points(m["prompt_encoder"], point_coords);
         auto prompt_embeddings = sam::embed_box(m["prompt_encoder"], point_coords);
-        ggml_set_name(prompt_embeddings, "sparse_prompt");
         auto dense_prompt = sam::no_mask_embed(m["prompt_encoder"]);
 
         auto [masks, iou] = sam::predict_masks(
-            m["dec"], image_embeddings, prompt_embeddings, dense_prompt);
-        ggml_set_name(masks, "masks");
-        ggml_set_name(iou, "iou");
-        ggml_set_output(masks);
-        ggml_set_output(iou);
-        ggml_build_forward_expand(m.graph, masks);
-        ggml_build_forward_expand(m.graph, iou);
+            m["dec"], img_embeddings, prompt_embeddings, dense_prompt);
 
         decode_graph.allocate();
-        set_tensor_data(image_embeddings, image_embeddings_data);
+        set_tensor_data(img_embeddings, image_embeddings_data);
 
         auto points = sam::preprocess_prompt(region, input_image.extent());
         set_tensor_data(point_coords, points);
 
-        decode_graph.compute(backend);
+        compute(backend, decode_graph);
 
         print_tensor(iou);
-        ggml_backend_tensor_get(masks, mask_data.data(), 0, ggml_nbytes(masks));
+        mask_data = get_tensor_data<float>(masks);
     }
 
     auto time_mask_decode = std::chrono::steady_clock::now();
@@ -236,27 +220,20 @@ void run_birefnet(Path const& model_path, Path const& input_path, Path const& ou
         Graph graph = Graph::create(backend, 6 * 1024);
         ModelRef m = ModelRef(model, graph);
 
-        Tensor x = ggml_new_tensor_4d(m, GGML_TYPE_F32, 3, 1024, 1024, 1);
-        ggml_set_name(x, "input");
-        ggml_set_input(x);
+        Tensor x = create_input(m, "input", GGML_TYPE_F32, {3, 1024, 1024, 1});
 
         auto result = birefnet::run(m, x, params);
-
-        ggml_set_name(result, "output");
-        ggml_set_output(result);
-        ggml_build_forward_expand(graph.graph, result);
 
         graph.allocate();
         set_tensor_data(x, image_data);
 
         auto time = std::chrono::steady_clock::now();
-        graph.compute(backend);
+        compute(backend, graph);
         fmt::print("Compute time: {}ms\n", std::chrono::duration_cast<std::chrono::milliseconds>(
                                                std::chrono::steady_clock::now() - time)
                                                .count());
 
-        std::vector<float> output_data(ggml_nelements(result));
-        ggml_backend_tensor_get(result, output_data.data(), 0, ggml_nbytes(result));
+        std::vector<float> output_data = get_tensor_data<float>(result);
         Image output_image = Image({1024, 1024}, Channels::mask);
         for (int i = 0; i < output_image.size(); ++i) {
             output_image.pixels()[i] = uint8_t(std::clamp(output_data[i], 0.f, 1.f) * 255);
@@ -295,41 +272,37 @@ void run_birefnet(Path const& model_path, Path const& input_path, Path const& ou
 
 void run_migan(Path const& model_path, Path const& image_path, Path const& mask_path,
                Path const& output_path, GGMLBackend backend) {
-    int resolution = 512;
-    auto input_image = Image::load(image_path.string().c_str());
-    auto mask_image = Image::load(mask_path.string().c_str());
-    auto image_data = migan::preprocess(input_image, mask_image, resolution, true);
 
     Backend_ backend_ = Backend_::init(backend);
     Model model = Model::load(model_path, backend_);
+    auto params = migan::MIGANParams::detect(model);
+    params.invert_mask = true;
     model.allocate();
+
+    auto input_image = Image::load(image_path.string().c_str());
+    auto mask_image = Image::load(mask_path.string().c_str());
+    auto image_data = migan::preprocess(input_image, mask_image, params);
 
     Graph graph = Graph::create(backend_, GGML_DEFAULT_GRAPH_SIZE);
     ModelRef m = ModelRef(model, graph);
 
-    Tensor x = ggml_new_tensor_4d(m, GGML_TYPE_F32, 4, resolution, resolution, 1);
-    ggml_set_name(x, "input");
-    ggml_set_input(x);
-
-    Tensor result = migan::run(m, x, resolution);
-    ggml_set_name(result, "output");
-    ggml_set_output(result);
-    ggml_build_forward_expand(graph.graph, result);
+    Tensor x = create_input(
+        m, "input", GGML_TYPE_F32, {4, params.resolution, params.resolution, 1});
+    Tensor result = migan::generate(m, x, params);
 
     graph.allocate();
     set_tensor_data(x, image_data);
 
     auto time = std::chrono::steady_clock::now();
 
-    graph.compute(backend_);
+    compute(backend_, graph);
 
     auto time_end = std::chrono::steady_clock::now();
     fmt::print("MIGAN processing time: {}ms\n",
                std::chrono::duration_cast<std::chrono::milliseconds>(time_end - time).count());
 
-    std::vector<float> output_data(ggml_nelements(result));
-    ggml_backend_tensor_get(result, output_data.data(), 0, ggml_nbytes(result));
-    Image output_image = migan::postprocess(output_data, input_image.extent());
+    std::vector<float> output_data = get_tensor_data<float>(result);
+    Image output_image = migan::postprocess(output_data, input_image.extent(), params);
     Image composited(input_image.extent(), Channels::rgb);
     alpha_composite(output_image, input_image, mask_image, composited.pixels());
 

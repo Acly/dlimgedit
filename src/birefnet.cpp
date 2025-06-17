@@ -574,7 +574,7 @@ Tensor run(ModelRef m, Tensor image, SwinParams const& encoder_params) {
     // Decoder
     Tensor scaled_preds = decode(m["decoder"], image, features);
 
-    return scaled_preds;
+    return mark_output(m, scaled_preds, "output");
 }
 
 } // namespace dlimg::birefnet

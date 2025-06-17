@@ -406,6 +406,7 @@ Tensor embed_box(ModelRef m, Tensor coords) {
     corner2 = ggml_add_inplace(m, corner2, m.weights("point_embeddings.3.weight"));
     ggml_build_forward_expand(m.graph, corner2);
 
+    ggml_set_name(x, "box_embed");
     return x;
 }
 
@@ -604,8 +605,8 @@ MaskPrediction predict_masks(ModelRef m, Tensor image_embeddings, Tensor sparse_
 
     // Generate mask quality predictions
     Tensor iou_pred = hypernetwork_mlp(m["iou_prediction_head"], iou_token_out, 3);
-
-    return {masks, iou_pred};
+    
+    return {mark_output(m, masks, "masks"), mark_output(m, iou_pred, "iou")};
 }
 
 template <typename Tsrc, typename Tdst, typename Fconvert>
