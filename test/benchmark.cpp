@@ -274,7 +274,9 @@ void run_migan(Path const& model_path, Path const& image_path, Path const& mask_
                Path const& output_path, GGMLBackend backend) {
 
     Backend_ backend_ = Backend_::init(backend);
-    Model model = Model::load(model_path, backend_);
+    ModelLoadParams mparams;
+    mparams.float_type = backend_.preferred_float_type();
+    Model model = Model::load(model_path, backend_, mparams);
     auto params = migan::MIGANParams::detect(model);
     params.invert_mask = true;
     model.allocate();
@@ -654,7 +656,7 @@ int main(int argc, char** argv) {
             auto backend = argc > 2 && std::string_view(argv[2]) == "vulkan"
                                ? dlimg::GGMLBackend::vulkan
                                : dlimg::GGMLBackend::cpu;
-            dlimg::run_migan("script/.ggml/migan_512_places2.gguf", "test/input/inpaint_image.png",
+            dlimg::run_migan("script/.ggml/migan_512_places2-fp16.gguf", "test/input/inpaint_image.png",
                              "test/input/inpaint_mask.png", "test/result/migan_ggml", backend);
         } else if (arg1 == "vulkan") {
             dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
