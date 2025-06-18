@@ -120,6 +120,15 @@ struct Model {
     ggml_backend_buffer_ptr weights_buffer;
     std::vector<ggml_backend_buffer_ptr> extra_buffers;
 
+    static Model init(Backend_ const& backend, size_t size) {
+        ggml_init_params params{};
+        params.mem_size = size * ggml_tensor_overhead();
+        params.no_alloc = true;
+        ggml_context_ptr ctx(ggml_init(params));
+
+        return Model{std::move(ctx), backend, backend.kind, {}, {}};
+    }
+
     static Model load(Path const& filepath, Backend_ const& backend, ModelLoadParams p = {}) {
         ggml_context* data_ctx;
         gguf_init_params params;

@@ -16,6 +16,7 @@
 #include <chrono>
 #include <filesystem>
 #include <vector>
+#include <numeric>
 
 namespace dlimg {
 
@@ -635,6 +636,173 @@ void test_conv_transpose_2d(std::string_view method) {
     // print_tensor(output);
 }
 
+const Shape4 no_permutation = Shape4{0, 1, 2, 3};
+
+struct concat_src {
+    Shape4 ne;
+    Shape4 p = no_permutation;
+    ggml_tensor * tensor = nullptr;
+    ggml_tensor * permuted = nullptr;
+    std::vector<float> data;
+};
+
+
+void permute(void* data, ggml_tensor* src, Shape4 p) {
+    Backend_ backend = Backend_::init(GGMLBackend::cpu);
+    Model model = Model::init(backend, 4);
+    Graph graph = Graph::create(backend);
+    ModelRef m = ModelRef(model, graph);
+    Tensor input = ggml_dup(m, src);
+    Tensor output = ggml_cont(m, ggml_permute(m, input, p[0], p[1], p[2], p[3]));
+    mark_output(m, output, "result");
+    graph.allocate();
+    ggml_backend_tensor_set(input, data, 0, ggml_nbytes(input));
+    compute(backend, graph);
+    ggml_backend_tensor_get(output, data, 0, ggml_nbytes(output));
+}
+
+
+std::vector<float> concat_reference(std::vector<concat_src> const& src, int dim) {
+    Shape4 oe = nelements(src[0].permuted);
+    for (int t = 1; t < src.size(); ++t) {
+        oe[dim] += src[t].ne[dim];
+    }
+    std::vector<float> result(oe[0] * oe[1] * oe[2] * oe[3]);
+    int64_t o[4] = {0, 0, 0, 0};
+
+    for (int t = 0; t < src.size(); ++t) {
+        Shape4 ne = nelements(src[t].permuted);
+
+        for (int i3 = 0; i3 < ne[3]; ++i3) {
+            for (int i2 = 0; i2 < ne[2]; ++i2) {
+                for (int i1 = 0; i1 < ne[1]; ++i1) {
+                    for (int i0 = 0; i0 < ne[0]; ++i0) {
+
+                        size_t src_idx = i3 * ne[2] * ne[1] * ne[0] +
+                                         i2 * ne[1] * ne[0] +
+                                         i1 * ne[0] + i0;
+                        size_t dst_idx = (i3 + o[3]) * oe[2] * oe[1] * oe[0] +
+                                         (i2 + o[2]) * oe[1] * oe[0] +
+                                         (i1 + o[1]) * oe[0] + (i0 + o[0]);
+
+                        result[dst_idx] = src[t].data[src_idx];
+                    }
+                }
+            }
+        }
+        o[dim] += ne[dim];
+    }
+    return result;
+}
+
+
+void test_concat(std::vector<concat_src> input, int dim) {
+    Backend_ backend = Backend_::init(GGMLBackend::cpu);
+    ggml_backend_cpu_set_n_threads(backend, 3);
+    Model model = Model::init(backend, 4);
+    Graph graph = Graph::create(backend);
+    ModelRef m = ModelRef(model, graph);
+
+    std::vector<ggml_tensor*> to_concat;
+    for (int i = 0; i < input.size(); ++i) {
+        concat_src& src = input[i];
+        src.tensor = create_input(m, "t", GGML_TYPE_F32, src.ne);
+        if (src.p != no_permutation) {
+            src.permuted = ggml_permute(m, src.tensor, src.p[0], src.p[1], src.p[2], src.p[3]);
+        } else {
+            src.permuted = src.tensor;
+        }
+        to_concat.push_back(src.permuted);
+        src.data = std::vector<float>(ggml_nelements(src.tensor));
+        std::iota(src.data.begin(), src.data.end(), i * 1000.f);
+    }
+    Tensor result = ggml_concat_n(m, to_concat.data(), to_concat.size(), dim);
+    mark_output(m, result, "result");
+
+    graph.allocate();
+    
+    for (concat_src& src : input) {
+        ggml_backend_tensor_set(src.tensor, src.data.data(), 0, ggml_nbytes(src.tensor));
+    }
+    compute(backend, graph);
+
+    std::vector<float> result_data(ggml_nelements(result));
+    ggml_backend_tensor_get(result, result_data.data(), 0, ggml_nbytes(result));
+
+    // Compute expected result with simple operations
+    for (concat_src& src : input) {
+        if (src.p != no_permutation) {
+            permute(src.data.data(), src.tensor, src.p);
+        }
+    }
+    std::vector<float> expected = concat_reference(input, dim);
+
+    // Compare results
+    if (result_data.size() != expected.size()) {
+        fmt::print("Result size mismatch: {} vs {}\n", result_data.size(), expected.size());
+        return;
+    }
+    for (size_t i = 0; i < result_data.size(); ++i) {
+        if (result_data[i] != expected[i]) {
+            fmt::print("Mismatch at index {}: {} vs {}\n", i, result_data[i], expected[i]);
+            return;
+        }
+    }
+    fmt::print("Concat test passed for dim {} with {} sources\n", dim, input.size());
+}
+
+void bench_concat(std::string_view arg) {
+    ggml_time_init();
+    const int iter = 100;
+    const auto ne0 = std::array<int64_t, 4>{256, 192, 64, 2};
+    const auto ne1 = std::array<int64_t, 4>{256, 192, 32, 2};
+    const auto ne2 = std::array<int64_t, 4>{256, 192, 16, 2};
+    const auto ne3 = std::array<int64_t, 4>{256, 192, 8, 2};
+
+    Backend_ backend = Backend_::init(GGMLBackend::cpu);
+    ggml_backend_cpu_set_n_threads(backend, 3);
+    Model model = Model::init(backend, 4);
+    Graph graph = Graph::create(backend);
+    ModelRef m = ModelRef(model, graph);
+
+    Tensor t0 = create_input(m, "t0", GGML_TYPE_F32, ne0);
+    Tensor t1 = create_input(m, "t1", GGML_TYPE_F32, ne1);
+    Tensor t2 = create_input(m, "t2", GGML_TYPE_F32, ne2);
+    Tensor t3 = create_input(m, "t3", GGML_TYPE_F32, ne3);
+    Tensor x = nullptr;
+    if (arg == "old") {
+        x = ggml_concat(m, t0, t1, 2);
+        x->op_params[1] = 42;
+        x = ggml_concat(m, x, t2, 2);
+        x->op_params[1] = 42;
+        x = ggml_concat(m, x, t3, 2);
+        x->op_params[1] = 42;
+    } else {
+        auto ts = std::array{t0, t1, t2, t3};
+        x = ggml_concat_n(m, ts.data(), ts.size(), 2);
+    }
+    mark_output(m, x, "result");
+
+    std::vector<float> data0(ggml_nelements(t0), 1.0f);
+    std::vector<float> data1(ggml_nelements(t1), 2.0f);
+    std::vector<float> data2(ggml_nelements(t2), 3.0f);
+    std::vector<float> data3(ggml_nelements(t3), 4.0f);
+
+    graph.allocate();
+    set_tensor_data(t0, data0);
+    set_tensor_data(t1, data1);
+    set_tensor_data(t2, data2);
+    set_tensor_data(t3, data3);
+
+    auto t = ggml_time_ms();
+    for (int i = 0; i < iter; ++i) {
+        compute(backend, graph);
+    }
+    t = ggml_time_ms() - t;
+    double mean = double(t) / double(iter);
+    fmt::print("Concat: {:.2f} ms\n", mean);
+}
+
 } // namespace dlimg
 
 int main(int argc, char** argv) {
@@ -646,6 +814,50 @@ int main(int argc, char** argv) {
             dlimg::test_conv_2d(argv[2]);
         } else if (arg1 == "conv_transpose_2d") {
             dlimg::test_conv_transpose_2d(argv[2]);
+        } else if (arg1 == "concat") {
+            dlimg::bench_concat(argv[2]);
+        } else if (arg1 == "test_concat") {
+            // dim 0
+            dlimg::test_concat({
+                {{6, 5, 3, 2}, dlimg::no_permutation},
+                {{9, 5, 3, 2}, dlimg::no_permutation}}, 0);
+            // dim 1
+            dlimg::test_concat({
+                {{16, 4, 3, 2}, dlimg::no_permutation},
+                {{16, 5, 3, 2}, dlimg::no_permutation}}, 1);
+            // dim 2
+            dlimg::test_concat({
+                {{16, 5, 3, 2}, dlimg::no_permutation},
+                {{16, 5, 7, 2}, dlimg::no_permutation}}, 2);
+            // dim 3
+            dlimg::test_concat({
+                {{16, 5, 3, 1}, dlimg::no_permutation},
+                {{16, 5, 3, 2}, dlimg::no_permutation}}, 3);
+            // 4 sources
+            dlimg::test_concat({
+                {{7, 5, 4, 3}, dlimg::no_permutation},
+                {{2, 5, 4, 3}, dlimg::no_permutation},
+                {{2, 5, 4, 3}, dlimg::no_permutation},
+                {{1, 5, 4, 3}, dlimg::no_permutation}}, 0);
+            // 3D tensor
+            dlimg::test_concat({
+                {{7, 3, 2, 1}, dlimg::no_permutation},
+                {{7, 5, 2, 1}, dlimg::no_permutation}}, 1);
+            // 2D tensor
+            dlimg::test_concat({
+                {{7, 3, 1, 1}, dlimg::no_permutation},
+                {{7, 5, 1, 1}, dlimg::no_permutation}}, 1);
+            // 1D tensor
+            dlimg::test_concat({
+                {{12, 1, 1, 1}, dlimg::no_permutation},
+                {{10, 1, 1, 1}, dlimg::no_permutation}}, 0);
+            // permutation (result ne is {5, 20, 4, 3})
+            dlimg::test_concat({
+                {{5, 4, 8, 3}, {0, 2, 1, 3}},
+                {{5, 6, 3, 4}, {0, 1, 3, 2}},
+                {{5, 3, 4, 3}, {0, 3, 2, 1}},
+                {{5, 3, 3, 4}, {0, 3, 1, 2}}}, 1);
+            
         } else if (arg1 == "birefnet") {
             auto backend = argc > 2 && std::string_view(argv[2]) == "vulkan"
                                ? dlimg::GGMLBackend::vulkan
@@ -656,8 +868,9 @@ int main(int argc, char** argv) {
             auto backend = argc > 2 && std::string_view(argv[2]) == "vulkan"
                                ? dlimg::GGMLBackend::vulkan
                                : dlimg::GGMLBackend::cpu;
-            dlimg::run_migan("script/.ggml/migan_512_places2-fp16.gguf", "test/input/inpaint_image.png",
-                             "test/input/inpaint_mask.png", "test/result/migan_ggml", backend);
+            dlimg::run_migan("script/.ggml/migan_512_places2-fp16.gguf",
+                             "test/input/inpaint_image.png", "test/input/inpaint_mask.png",
+                             "test/result/migan_ggml", backend);
         } else if (arg1 == "vulkan") {
             dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
                                  dlimg::Region{dlimg::Point{180, 110}, dlimg::Extent{325, 220}},

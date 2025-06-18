@@ -12,6 +12,19 @@ using sam::conv_2d;
 using sam::layer_norm;
 using sam::linear;
 
+Tensor concat(ModelRef m, std::array<Tensor, GGML_MAX_SRC> src, int dim) {
+    size_t n = std::count_if(src.begin(), src.end(), [](Tensor t) { return t != nullptr; });
+    if (m.backend == GGMLBackend::cpu) {
+        return ggml_concat_n(m, src.data(), n, dim);
+    } else {
+        Tensor x = src[0];
+        for (size_t i = 1; i < n; ++i) {
+            x = ggml_concat(m, x, src[i], dim);
+        }
+        return x;
+    }
+}
+
 std::vector<float> preprocess_image(ImageView image, int image_size) {
     constexpr float4 mean = float4(123.675f, 116.28f, 103.53f, 0.f); // 0.485, 0.456, 0.406
     constexpr float4 std = float4(58.395f, 57.12f, 57.375f, 1.f);    // 0.229, 0.224, 0.225
@@ -176,13 +189,13 @@ Tensor patch_merging(ModelRef m, Tensor x, int w, int h) {
     ASSERT(w % 2 == 0 && h % 2 == 0 && "Expecting even spatial dimensions");
 
     x = ggml_reshape_4d(m, x, c, w, h, b);
-    Tensor x0 = slice(m, x, {}, {0, w, 2}, {0, h, 2}, {});
-    Tensor x1 = slice(m, x, {}, {0, w, 2}, {1, h, 2}, {});
-    Tensor x2 = slice(m, x, {}, {1, w, 2}, {0, h, 2}, {});
-    Tensor x3 = slice(m, x, {}, {1, w, 2}, {1, h, 2}, {});
-    x = ggml_concat(m, x0, x1, 0);
-    x = ggml_concat(m, x, x2, 0);
-    x = ggml_concat(m, x, x3, 0);
+    // clang-format off
+    x = concat(m, {
+        slice(m, x, {}, {0, w, 2}, {0, h, 2}, {}),
+        slice(m, x, {}, {0, w, 2}, {1, h, 2}, {}),
+        slice(m, x, {}, {1, w, 2}, {0, h, 2}, {}),
+        slice(m, x, {}, {1, w, 2}, {1, h, 2}, {})}, 0);
+    // clang-format on
     x = ggml_reshape_3d(m, x, c * 4, n / 4, b);
 
     x = layer_norm(m["norm"], x);
@@ -346,18 +359,18 @@ SwinResult encode_concat(ModelRef m, SwinResult& xs, SwinResult& xs_low) {
     // cwhn -> whcn
     for (int i = 0; i < 4; ++i) {
         xs[i] = ggml_cont(m, ggml_permute(m, xs[i], 2, 0, 1, 3));
-        xs_low[i] = ggml_cont(m, ggml_permute(m, xs_low[i], 2, 0, 1, 3));
+        xs_low[i] = ggml_permute(m, xs_low[i], 2, 0, 1, 3);
     }
 
-    xs[0] = ggml_concat(m, xs[0], upscale_to_whcn(m, xs_low[0], xs[0]), 2);
-    xs[1] = ggml_concat(m, xs[1], upscale_to_whcn(m, xs_low[1], xs[1]), 2);
-    xs[2] = ggml_concat(m, xs[2], upscale_to_whcn(m, xs_low[2], xs[2]), 2);
-    xs[3] = ggml_concat(m, xs[3], upscale_to_whcn(m, xs_low[3], xs[3]), 2);
+    xs[0] = concat(m, {xs[0], upscale_to_whcn(m, xs_low[0], xs[0])}, 2);
+    xs[1] = concat(m, {xs[1], upscale_to_whcn(m, xs_low[1], xs[1])}, 2);
+    xs[2] = concat(m, {xs[2], upscale_to_whcn(m, xs_low[2], xs[2])}, 2);
+    xs[3] = concat(m, {xs[3], upscale_to_whcn(m, xs_low[3], xs[3])}, 2);
 
-    Tensor x3 = downscale_by_whcn(m, xs[0], 8);
-    x3 = ggml_concat(m, x3, downscale_by_whcn(m, xs[1], 4), 2);
-    x3 = ggml_concat(m, x3, downscale_by_whcn(m, xs[2], 2), 2);
-    xs[3] = ggml_concat(m, x3, xs[3], 2);
+    xs[3] = concat(m,
+                   {downscale_by_whcn(m, xs[0], 8), downscale_by_whcn(m, xs[1], 4),
+                    downscale_by_whcn(m, xs[2], 2), xs[3]},
+                   /*dim = */ 2);
 
     // whcn -> cwhn
     for (int i = 0; i < 4; ++i) {
@@ -437,18 +450,11 @@ Tensor aspp_deformable(ModelRef m, Tensor x) {
         x_deforms[i] = aspp_module_deformable(aspp_deforms[i], x, padding);
     }
     Tensor x5 = global_avg_pool(m["global_avg_pool"], x);
-    // x5 = ggml_reshape_4d(m, x5, 1, 1, x5->ne[0], x5->ne[3]);
-    // x5 = ggml_upscale_ext(m, x5, x1->ne[1], x1->ne[2], x5->ne[2], x5->ne[3],
-    //                       GGML_SCALE_MODE_BILINEAR | GGML_SCALE_ALIGN_CORNERS);
-    // x5 = ggml_cont(m, ggml_permute(m, x5, 1, 2, 0, 3)); // whcn -> cwhn
     x5 = ggml_permute(m, x5, 2, 0, 1, 3); // cwhn -> whcn
     x5 = ggml_upscale_ext(m, x5, x1->ne[1], x1->ne[2], x5->ne[2], x5->ne[3],
                           GGML_SCALE_MODE_BILINEAR | GGML_SCALE_ALIGN_CORNERS);
-    x5 = ggml_permute(m, x5, 1, 2, 0, 3); // whcn -> cwhn
-    x = ggml_concat(m, x1, x_deforms[0], 0);
-    x = ggml_concat(m, x, x_deforms[1], 0);
-    x = ggml_concat(m, x, x_deforms[2], 0);
-    x = ggml_concat(m, x, x5, 0);
+    x5 = ggml_cont(m, ggml_permute(m, x5, 1, 2, 0, 3)); // whcn -> cwhn
+    x = concat(m, {x1, x_deforms[0], x_deforms[1], x_deforms[2], x5}, 0);
 
     x = conv_2d(m["conv1"], x);
     x = batch_norm_2d(m["bn1"], x);
@@ -553,7 +559,6 @@ Tensor decode(ModelRef m, Tensor x, SwinResult const& features) {
     }
     _p1 = basic_decoder_block(m["block1"], _p1);
     _p1 = upscale_to(m, _p1, x);
-    // ... weird image_to_patches stuff even though _p1 is same size as x
     Tensor p1_ipt = simple_conv(m["ipt_blk1"], x);
     _p1 = ggml_concat(m, _p1, p1_ipt, 0);
 
