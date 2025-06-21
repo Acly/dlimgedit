@@ -2,7 +2,6 @@
 
 add_executable(test_dlimgedit)
 target_sources(test_dlimgedit PRIVATE
-  test_mobile_sam.cpp
   test_image.cpp
   test_segmentation.cpp
   test_utils.cpp

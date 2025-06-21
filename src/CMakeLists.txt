@@ -5,6 +5,7 @@ target_sources(dlimgedit PRIVATE
   birefnet.cpp
   environment.cpp
   image.cpp
+  migan.cpp
   mobile_sam.cpp
   tensor.cpp
   segmentation.cpp

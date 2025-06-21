@@ -18,18 +18,18 @@ def conv_2d_kernel_to_nhwc(kernel: torch.Tensor):
 
 in_filepath = sys.argv[1]
 out_dir = sys.argv[2]
-convert_fp16 = len(sys.argv) > 3 and sys.argv[3] == "fp16"
+convert_f16 = len(sys.argv) > 3 and sys.argv[3] == "f16"
 
-out_filename = Path(in_filepath).name.lower().replace(".pt", "")
-if convert_fp16:
-    out_filename += "-fp16"
+out_filename = Path(in_filepath).name.replace(".pt", "")
+if convert_f16:
+    out_filename += "-F16"
 out_filename += ".gguf"
 out_filepath = Path(out_dir) / out_filename
 
 
 model: dict[str, torch.Tensor] = torch.load(in_filepath, weights_only=True)
 
-writer = gguf.GGUFWriter(out_filepath, "birefnet")
+writer = gguf.GGUFWriter(out_filepath, "mi-gan")
 writer.add_name("MI-GAN")
 
 for name, tensor in model.items():
@@ -46,7 +46,7 @@ for name, tensor in model.items():
     if is_conv:
         tensor = conv_2d_kernel_to_nhwc(tensor)
 
-    if convert_fp16 and tensor.dtype == torch.float32:
+    if convert_f16 and tensor.dtype == torch.float32:
         tensor = tensor.to(torch.float16)
 
     tensor_data = tensor.numpy()
