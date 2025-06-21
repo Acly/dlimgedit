@@ -1,4 +1,5 @@
 #include "birefnet.hpp"
+#include "esrgan.hpp"
 #include "migan.hpp"
 #include "mobile_sam.hpp"
 
@@ -380,6 +381,17 @@ API int32_t dlimg_workbench(char const* testcase, int input_count, dlimg::RawTen
             feats[1] = m.weights("feat8");
             feats[2] = m.weights("feat4");
             w.output(migan::synthesis(m, input, feats, 16), output);
+        } else if (name == "esrgan_upconv") {
+            w.output(esrgan::upsample(m[1], input), output);
+        } else if (name == "esrgan_residual_dense_block") {
+            w.output(esrgan::risidual_dense_block(m, input), output);
+        } else if (name == "esrgan_rrdb") {
+            w.output(esrgan::rrdb(m, input), output);
+        } else if (name == "esrgan_rrdbnet") {
+            esrgan::ESRGANParams p;
+            p.n_blocks = 2;
+            p.scale = 2;
+            w.output(esrgan::upscale(m, input, p), output);
         } else {
             throw std::runtime_error("Unknown testcase: " + std::string(testcase));
         }

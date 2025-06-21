@@ -373,4 +373,19 @@ inline Tensor slice(ggml_context* ctx, Tensor x, slice_t s0, slice_t s1 = {}, sl
     return ggml_view_4d(ctx, x, ne[0], ne[1], ne[2], ne[3], nb[1], nb[2], nb[3], offset);
 }
 
+
+inline Tensor concat(ModelRef m, std::array<Tensor, GGML_MAX_SRC> src, int dim) {
+    size_t n = std::count_if(src.begin(), src.end(), [](Tensor t) { return t != nullptr; });
+    if (m.backend == GGMLBackend::cpu) {
+        return ggml_concat_n(m, src.data(), n, dim);
+    } else {
+        Tensor x = src[0];
+        for (size_t i = 1; i < n; ++i) {
+            x = ggml_concat(m, x, src[i], dim);
+        }
+        return x;
+    }
+}
+
+
 } // namespace dlimg

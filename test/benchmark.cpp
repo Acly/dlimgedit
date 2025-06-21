@@ -1,4 +1,5 @@
 #include "birefnet.hpp"
+#include "esrgan.hpp"
 #include "image.hpp"
 #include "migan.hpp"
 #include "mobile_sam.hpp"
@@ -15,8 +16,9 @@
 
 #include <chrono>
 #include <filesystem>
-#include <vector>
 #include <numeric>
+#include <vector>
+
 
 namespace dlimg {
 
@@ -311,6 +313,46 @@ void run_migan(Path const& model_path, Path const& image_path, Path const& mask_
 
     auto output_path_str = fmt::format("{}_output.png", output_path.string());
     Image::save(composited, output_path_str.c_str());
+    fmt::print("Saved to {}\n", output_path_str);
+}
+
+void run_esrgan(Path const& model_path, Path const& input_path, Path const& output_path,
+                GGMLBackend backend) {
+    Backend_ backend_ = Backend_::init(backend);
+    ModelLoadParams mparams;
+    mparams.float_type = backend_.preferred_float_type();
+    Model model = Model::load(model_path, backend_, mparams);
+    auto params = esrgan::ESRGANParams{};
+    model.allocate();
+
+    auto input_image = Image::load(input_path.string().c_str());
+    auto image_data =
+        std::vector<float>(input_image.extent().width * input_image.extent().height * 3);
+    image_to_float(input_image, image_data, 3);
+
+    Graph graph = Graph::create(backend_, 4 * 1024);
+    ModelRef m = ModelRef(model, graph);
+
+    Tensor x = create_input(
+        m, "input", GGML_TYPE_F32, {3, input_image.extent().height, input_image.extent().width, 1});
+    Tensor result = esrgan::upscale(m, x, params);
+
+    graph.allocate();
+    set_tensor_data(x, image_data);
+
+    auto time = std::chrono::steady_clock::now();
+    compute(backend_, graph);
+    auto time_end = std::chrono::steady_clock::now();
+    fmt::print("ESRGAN processing time: {}ms\n",
+               std::chrono::duration_cast<std::chrono::milliseconds>(time_end - time).count());
+
+    std::vector<float> output_data = get_tensor_data<float>(result);
+    Image output_image = Image(
+        {input_image.extent().width * 4, input_image.extent().height * 4}, Channels::rgb);
+    image_from_float(output_data, std::span(output_image.pixels(), output_image.size()));
+
+    auto output_path_str = fmt::format("{}_output.png", output_path.string());
+    Image::save(output_image, output_path_str.c_str());
     fmt::print("Saved to {}\n", output_path_str);
 }
 
@@ -641,11 +683,10 @@ const Shape4 no_permutation = Shape4{0, 1, 2, 3};
 struct concat_src {
     Shape4 ne;
     Shape4 p = no_permutation;
-    ggml_tensor * tensor = nullptr;
-    ggml_tensor * permuted = nullptr;
+    ggml_tensor* tensor = nullptr;
+    ggml_tensor* permuted = nullptr;
     std::vector<float> data;
 };
-
 
 void permute(void* data, ggml_tensor* src, Shape4 p) {
     Backend_ backend = Backend_::init(GGMLBackend::cpu);
@@ -660,7 +701,6 @@ void permute(void* data, ggml_tensor* src, Shape4 p) {
     compute(backend, graph);
     ggml_backend_tensor_get(output, data, 0, ggml_nbytes(output));
 }
-
 
 std::vector<float> concat_reference(std::vector<concat_src> const& src, int dim) {
     Shape4 oe = nelements(src[0].permuted);
@@ -695,7 +735,6 @@ std::vector<float> concat_reference(std::vector<concat_src> const& src, int dim)
     return result;
 }
 
-
 void test_concat(std::vector<concat_src> input, int dim) {
     Backend_ backend = Backend_::init(GGMLBackend::cpu);
     ggml_backend_cpu_set_n_threads(backend, 3);
@@ -720,7 +759,7 @@ void test_concat(std::vector<concat_src> input, int dim) {
     mark_output(m, result, "result");
 
     graph.allocate();
-    
+
     for (concat_src& src : input) {
         ggml_backend_tensor_set(src.tensor, src.data.data(), 0, ggml_nbytes(src.tensor));
     }
@@ -817,6 +856,7 @@ int main(int argc, char** argv) {
         } else if (arg1 == "concat") {
             dlimg::bench_concat(argv[2]);
         } else if (arg1 == "test_concat") {
+            // clang-format off
             // dim 0
             dlimg::test_concat({
                 {{6, 5, 3, 2}, dlimg::no_permutation},
@@ -857,7 +897,7 @@ int main(int argc, char** argv) {
                 {{5, 6, 3, 4}, {0, 1, 3, 2}},
                 {{5, 3, 4, 3}, {0, 3, 2, 1}},
                 {{5, 3, 3, 4}, {0, 3, 1, 2}}}, 1);
-            
+            // clang-format on
         } else if (arg1 == "birefnet") {
             auto backend = argc > 2 && std::string_view(argv[2]) == "vulkan"
                                ? dlimg::GGMLBackend::vulkan
@@ -871,6 +911,13 @@ int main(int argc, char** argv) {
             dlimg::run_migan("script/.ggml/migan_512_places2-fp16.gguf",
                              "test/input/inpaint_image.png", "test/input/inpaint_mask.png",
                              "test/result/migan_ggml", backend);
+        } else if (arg1 == "esrgan") {
+            auto backend = argc > 2 && std::string_view(argv[2]) == "vulkan"
+                               ? dlimg::GGMLBackend::vulkan
+                               : dlimg::GGMLBackend::cpu;
+            dlimg::run_esrgan("script/.ggml/4x_NMKD-Superscale-SP_178000_Gh.gguf",
+                              "test/input/cat_and_hat_lowres.png", "test/result/esrgan_ggml",
+                              backend);
         } else if (arg1 == "vulkan") {
             dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
                                  dlimg::Region{dlimg::Point{180, 110}, dlimg::Extent{325, 220}},

@@ -1,8 +1,7 @@
 import torch
-import torchvision
 import numpy as np
 
-from torch import Tensor, nn
+from torch import nn
 from torch.nn import functional as F
 
 from . import workbench

@@ -12,19 +12,6 @@ using sam::conv_2d;
 using sam::layer_norm;
 using sam::linear;
 
-Tensor concat(ModelRef m, std::array<Tensor, GGML_MAX_SRC> src, int dim) {
-    size_t n = std::count_if(src.begin(), src.end(), [](Tensor t) { return t != nullptr; });
-    if (m.backend == GGMLBackend::cpu) {
-        return ggml_concat_n(m, src.data(), n, dim);
-    } else {
-        Tensor x = src[0];
-        for (size_t i = 1; i < n; ++i) {
-            x = ggml_concat(m, x, src[i], dim);
-        }
-        return x;
-    }
-}
-
 std::vector<float> preprocess_image(ImageView image, int image_size) {
     constexpr float4 mean = float4(123.675f, 116.28f, 103.53f, 0.f); // 0.485, 0.456, 0.406
     constexpr float4 std = float4(58.395f, 57.12f, 57.375f, 1.f);    // 0.229, 0.224, 0.225
