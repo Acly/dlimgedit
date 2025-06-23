@@ -19,7 +19,6 @@
 #include <numeric>
 #include <vector>
 
-
 namespace dlimg {
 
 using Path = std::filesystem::path;
@@ -249,13 +248,11 @@ void run_birefnet(Path const& model_path, Path const& input_path, Path const& ou
         fmt::print("Saved to {}\n", output_path_mask);
 
         auto input_float =
-            std::vector<float4>(input_image.extent().width * input_image.extent().height);
-        image_to_float(
-            input_image,
-            std::span(reinterpret_cast<float*>(input_float.data()), input_float.size() * 4), 4);
+            std::vector<rgba32_t>(input_image.extent().width * input_image.extent().height);
+        image_to_float(input_image, image_span<rgba32_t>(input_image.extent(), input_float.data()));
         auto resized_mask =
             std::vector<float>(input_image.extent().width * input_image.extent().height);
-        image_to_float(output_mask, resized_mask, 1);
+        image_to_float(output_mask, image_span<float>(input_image.extent(), resized_mask));
         auto foreground = estimate_foreground(input_float, resized_mask, input_image.extent());
 
         Image output_image_rgba = Image(input_image.extent(), Channels::rgba);
@@ -326,30 +323,44 @@ void run_esrgan(Path const& model_path, Path const& input_path, Path const& outp
     model.allocate();
 
     auto input_image = Image::load(input_path.string().c_str());
-    auto image_data =
-        std::vector<float>(input_image.extent().width * input_image.extent().height * 3);
-    image_to_float(input_image, image_data, 3);
+    auto tiles = tile_layout(input_image.extent(), 224, 16);
+    auto out_tiles = tile_layout::scale(tiles, params.scale);
+    auto image_data = std::vector<float>(3 * tiles.tile_size[0] * tiles.tile_size[1]);
+    auto tile = image_span<rgb32_t>(tiles.tile_extent(), image_data);
+    auto out_data = std::vector<float>(
+        3 * input_image.extent().width * params.scale * input_image.extent().height * params.scale,
+        0.0f);
+    auto out = image_span<rgb32_t>(
+        {input_image.extent().width * params.scale, input_image.extent().height * params.scale},
+        out_data);
+    auto out_tile_data = std::vector<float>(out_tiles.tile_size[0] * out_tiles.tile_size[1] * 3);
+    auto out_tile = image_span<rgb32_t>(out_tiles.tile_extent(), out_tile_data);
 
     Graph graph = Graph::create(backend_, 4 * 1024);
     ModelRef m = ModelRef(model, graph);
 
     Tensor x = create_input(
-        m, "input", GGML_TYPE_F32, {3, input_image.extent().height, input_image.extent().width, 1});
+        m, "input", GGML_TYPE_F32, {3, tiles.tile_size[0], tiles.tile_size[1], 1});
     Tensor result = esrgan::upscale(m, x, params);
 
     graph.allocate();
-    set_tensor_data(x, image_data);
 
     auto time = std::chrono::steady_clock::now();
-    compute(backend_, graph);
+    for (int t = 0; t < tiles.total(); ++t) {
+        i32x2 tile_coord = tiles.coord(t);
+        image_to_float(input_image, tile, float4(0), float4(1), tiles.start(tile_coord));
+        set_tensor_data(x, tile.as_float());
+        compute(backend_, graph);
+        ggml_backend_tensor_get(result, out_tile_data.data(), 0, ggml_nbytes(result));
+        merge_tile(out_tile, out, tile_coord, out_tiles);
+    }
     auto time_end = std::chrono::steady_clock::now();
     fmt::print("ESRGAN processing time: {}ms\n",
                std::chrono::duration_cast<std::chrono::milliseconds>(time_end - time).count());
 
-    std::vector<float> output_data = get_tensor_data<float>(result);
     Image output_image = Image(
         {input_image.extent().width * 4, input_image.extent().height * 4}, Channels::rgb);
-    image_from_float(output_data, std::span(output_image.pixels(), output_image.size()));
+    image_from_float(out_data, std::span(output_image.pixels(), output_image.size()));
 
     auto output_path_str = fmt::format("{}_output.png", output_path.string());
     Image::save(output_image, output_path_str.c_str());
@@ -916,7 +927,7 @@ int main(int argc, char** argv) {
                                ? dlimg::GGMLBackend::vulkan
                                : dlimg::GGMLBackend::cpu;
             dlimg::run_esrgan("script/.ggml/4x_NMKD-Superscale-SP_178000_Gh.gguf",
-                              "test/input/cat_and_hat_lowres.png", "test/result/esrgan_ggml",
+                              "test/input/wardrobe.png", "test/result/esrgan_ggml",
                               backend);
         } else if (arg1 == "vulkan") {
             dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",

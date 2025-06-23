@@ -52,7 +52,7 @@ Tensor depthwise_conv_2d(ModelRef m, Tensor x, int stride, int pad) {
     x = ggml_permute(m, x, 2, 0, 1, 3);
     x = ggml_conv_2d_dw_direct(m, weight, x, stride, stride, pad, pad, 1, 1);
     x = ggml_permute(m, x, 1, 2, 0, 3);
-    
+
     if (Tensor bias = m.find("bias")) {
         bias = ggml_reshape_4d(m, bias, bias->ne[0], 1, 1, 1);
         x = ggml_add_inplace(m, x, bias);
@@ -157,8 +157,8 @@ Extent scale_extent(Extent extent, float scale) {
 }
 
 std::vector<float> preprocess_image(ImageView image) {
-    constexpr float4 mean = float4(123.675f, 116.28f, 103.53f, 0.f);
-    constexpr float4 std = float4(58.395f, 57.12f, 57.375f, 1.f);
+    constexpr float4 mean = float4(0.485f, 0.456f, 0.406f, 0.f);
+    constexpr float4 std = float4(0.229f, 0.224f, 0.225f, 1.f);
 
     std::optional<Image> resized;
     float scale = resize_longest_side(image.extent, image_size);
@@ -168,7 +168,7 @@ std::vector<float> preprocess_image(ImageView image) {
     }
 
     std::vector<float> result(3 * image_size * image_size);
-    image_to_float(image, result, 3, mean, std);
+    image_to_float(image, image_span<rgb32_t>(image.extent, result), -mean, 1.f / std);
     return result;
 }
 
@@ -605,7 +605,7 @@ MaskPrediction predict_masks(ModelRef m, Tensor image_embeddings, Tensor sparse_
 
     // Generate mask quality predictions
     Tensor iou_pred = hypernetwork_mlp(m["iou_prediction_head"], iou_token_out, 3);
-    
+
     return {mark_output(m, masks, "masks"), mark_output(m, iou_pred, "iou")};
 }
 

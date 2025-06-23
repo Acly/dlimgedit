@@ -67,25 +67,26 @@ void resize_mask(ImageView const& input, Extent target, uint8_t* output) {
     }
 }
 
-void image_to_float(ImageView const& img, std::span<float> dst, int n_channels, float4 mean,
-                    float4 std) {
-
-    n_channels = n_channels <= 0 ? count(img.channels) : n_channels;
-    // ASSERT(n_channels <= count(img.channels));
-    ASSERT(dst.size() == size_t(img.extent.width * img.extent.height * n_channels));
-    int channels_to_copy = std::min(n_channels, count(img.channels));
-
+template <typename T>
+void image_to_float(ImageView const& img, image_span<T> dst, float4 offset, float4 scale,
+                    i32x2 tile_offset) {
     auto input = PixelAccessor(img);
-    for (int y = 0; y < img.extent.height; ++y) {
-        for (int x = 0; x < img.extent.width; ++x) {
-            for (int c = 0; c < channels_to_copy; ++c) {
-                float value = float(input.get(img.pixels, x, y, c));
-                float normalized = (value - mean[c]) / std[c];
-                dst[y * img.extent.width * n_channels + x * n_channels + c] = normalized;
-            }
+    for (int y = 0; y < dst.extent.height; ++y) {
+        for (int x = 0; x < dst.extent.width; ++x) {
+            int x0 = std::min(x + tile_offset[0], img.extent.width - 1);
+            int y0 = std::min(y + tile_offset[1], img.extent.height - 1);
+            float4 v{
+                float(input.get(img.pixels, x0, y0, 0)), float(input.get(img.pixels, x0, y0, 1)),
+                float(input.get(img.pixels, x0, y0, 2)), float(input.get(img.pixels, x0, y0, 3))};
+            v = (v / 255.f + offset) * scale;
+            dst.set(x, y, v);
         }
     }
 }
+
+template void image_to_float(ImageView const&, image_span<rgba32_t>, float4, float4, i32x2);
+template void image_to_float(ImageView const&, image_span<rgb32_t>, float4, float4, i32x2);
+template void image_to_float(ImageView const&, image_span<float>, float4, float4, i32x2);
 
 void image_from_float(std::span<float const> src, std::span<uint8_t> dst, float scale,
                       float offset) {
@@ -219,6 +220,36 @@ void alpha_composite(ImageView const& fg, ImageView const& bg, ImageView const& 
             for (int c = 0; c < 3; ++c) {
                 dst[i + c] = comp(x, y, c, w0, w1);
             }
+        }
+    }
+}
+
+void merge_tile(image_span<const rgb32_t> tile, image_span<rgb32_t> dst, i32x2 tile_coord,
+                tile_layout const& layout) {
+    i32x2 beg = layout.start(tile_coord);
+    i32x2 end = layout.end(tile_coord);
+    i32x2 pad_beg = layout.start(tile_coord, layout.overlap);
+    i32x2 pad_end = layout.end(tile_coord, layout.overlap);
+
+    for (int y = beg[1]; y < end[1]; ++y) {
+        for (int x = beg[0]; x < end[0]; ++x) {
+            i32x2 idx = {x, y};
+
+            float weight = 1.0f;
+            i32x2 coverage = {0, 0};
+            for (int i = 0; i < 2; ++i) {
+                if (idx[i] < pad_beg[i]) {
+                    weight *= float(layout.overlap[i] - (pad_beg[i] - idx[i]) + 1);
+                    coverage[i] = layout.overlap[i];
+                } else if (idx[i] >= pad_end[i]) {
+                    weight *= float(layout.overlap[i] - (idx[i] - pad_end[i]));
+                    coverage[i] = layout.overlap[i];
+                }
+            }
+            float norm = (coverage[0] + 1) * (coverage[1] + 1);
+            float blend = weight > 0 ? weight / norm : 1.0f;
+
+            dst.set(idx, dst.get(idx) + blend * tile.get(idx - beg));
         }
     }
 }

@@ -13,8 +13,8 @@ using sam::layer_norm;
 using sam::linear;
 
 std::vector<float> preprocess_image(ImageView image, int image_size) {
-    constexpr float4 mean = float4(123.675f, 116.28f, 103.53f, 0.f); // 0.485, 0.456, 0.406
-    constexpr float4 std = float4(58.395f, 57.12f, 57.375f, 1.f);    // 0.229, 0.224, 0.225
+    constexpr float4 mean = float4(0.485f, 0.456f, 0.406f, 0.f);
+    constexpr float4 std = float4(0.229f, 0.224f, 0.225f, 1.f);
 
     std::optional<Image> resized;
     if (image.extent.width != image_size || image.extent.height != image_size) {
@@ -23,7 +23,7 @@ std::vector<float> preprocess_image(ImageView image, int image_size) {
     }
 
     std::vector<float> result(3 * image_size * image_size);
-    image_to_float(image, result, 3, mean, std);
+    image_to_float(image, image_span<rgb32_t>(image.extent, result), -mean, 1.f / std);
     return result;
 }
 
