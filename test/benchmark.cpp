@@ -320,7 +320,8 @@ void run_esrgan(Path const& model_path, Path const& input_path, Path const& outp
     mparams.float_type = backend_.preferred_float_type();
     Model model = Model::load(model_path, backend_, mparams);
     auto params = esrgan::ESRGANParams::detect(model);
-    fmt::print("ESRGAN: scale = {}, n_blocks = {}\n", params.scale, params.n_blocks);
+    fmt::print("ESRGAN: scale = {}, n_blocks = {}, type = {}\n", params.scale, params.n_blocks,
+               ggml_type_name(model.fp_type()));
     model.allocate();
 
     auto input_image = Image::load(input_path.string().c_str());
@@ -927,9 +928,8 @@ int main(int argc, char** argv) {
             auto backend = argc > 2 && std::string_view(argv[2]) == "vulkan"
                                ? dlimg::GGMLBackend::vulkan
                                : dlimg::GGMLBackend::cpu;
-            dlimg::run_esrgan("script/.ggml/4x_foolhardy_Remacrih.gguf",
-                              "test/input/wardrobe.png", "test/result/esrgan_ggml",
-                              backend);
+            dlimg::run_esrgan("script/.ggml/4x_foolhardy_Remacrih-F16.gguf",
+                              "test/input/wardrobe.png", "test/result/esrgan_ggml", backend);
         } else if (arg1 == "vulkan") {
             dlimg::run_sam_ggml2("script/.ggml/mobile_sam.gguf", "test/input/cat_and_hat.png",
                                  dlimg::Region{dlimg::Point{180, 110}, dlimg::Extent{325, 220}},

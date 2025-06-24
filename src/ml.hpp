@@ -176,6 +176,16 @@ struct Model {
         extra_buffers.push_back(std::move(buffer));
         return true;
     }
+
+    ggml_type fp_type() const {
+        for (ggml_tensor* t = ggml_get_first_tensor(context.get()); t != nullptr;
+             t = ggml_get_next_tensor(context.get(), t)) {
+            if (is_float_type(t->type)) {
+                return t->type; // return first float type found
+            }
+        }
+        return GGML_TYPE_COUNT;
+    }
 };
 
 struct Graph {
@@ -373,7 +383,6 @@ inline Tensor slice(ggml_context* ctx, Tensor x, slice_t s0, slice_t s1 = {}, sl
     return ggml_view_4d(ctx, x, ne[0], ne[1], ne[2], ne[3], nb[1], nb[2], nb[3], offset);
 }
 
-
 inline Tensor concat(ModelRef m, std::array<Tensor, GGML_MAX_SRC> src, int dim) {
     size_t n = std::count_if(src.begin(), src.end(), [](Tensor t) { return t != nullptr; });
     if (m.backend == GGMLBackend::cpu) {
@@ -386,6 +395,5 @@ inline Tensor concat(ModelRef m, std::array<Tensor, GGML_MAX_SRC> src, int dim) 
         return x;
     }
 }
-
 
 } // namespace dlimg

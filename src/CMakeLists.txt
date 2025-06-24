@@ -4,6 +4,7 @@ target_sources(dlimgedit PRIVATE
   dlimgedit.cpp
   birefnet.cpp
   environment.cpp
+  esrgan.cpp
   image.cpp
   migan.cpp
   mobile_sam.cpp

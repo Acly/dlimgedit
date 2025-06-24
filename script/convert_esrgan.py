@@ -36,7 +36,7 @@ model = ModelLoader().load_from_file(in_filepath)
 if model.model.shuffle_factor is not None:
     print("RealESRGAN models with pixel shuffle are not supported yet.")
     exit(1)
-if model.model.plus:
+if getattr(model.model, "plus", False):
     print("RealESRGAN+ (plus) models are not supported yet.")
     exit(1)
 
