@@ -319,7 +319,8 @@ void run_esrgan(Path const& model_path, Path const& input_path, Path const& outp
     ModelLoadParams mparams;
     mparams.float_type = backend_.preferred_float_type();
     Model model = Model::load(model_path, backend_, mparams);
-    auto params = esrgan::ESRGANParams{};
+    auto params = esrgan::ESRGANParams::detect(model);
+    fmt::print("ESRGAN: scale = {}, n_blocks = {}\n", params.scale, params.n_blocks);
     model.allocate();
 
     auto input_image = Image::load(input_path.string().c_str());
@@ -926,7 +927,7 @@ int main(int argc, char** argv) {
             auto backend = argc > 2 && std::string_view(argv[2]) == "vulkan"
                                ? dlimg::GGMLBackend::vulkan
                                : dlimg::GGMLBackend::cpu;
-            dlimg::run_esrgan("script/.ggml/4x_NMKD-Superscale-SP_178000_Gh.gguf",
+            dlimg::run_esrgan("script/.ggml/4x_foolhardy_Remacrih.gguf",
                               "test/input/wardrobe.png", "test/result/esrgan_ggml",
                               backend);
         } else if (arg1 == "vulkan") {

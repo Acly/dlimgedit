@@ -6,6 +6,7 @@ import torch
 from pathlib import Path
 
 import gguf
+from spandrel import ModelLoader
 
 
 def conv_2d_kernel_to_nhwc(kernel: torch.Tensor):
@@ -28,12 +29,21 @@ out_filename += ".gguf"
 out_filepath = Path(out_dir) / out_filename
 
 
-model: dict[str, torch.Tensor] = torch.load(in_filepath, weights_only=True)
+# Load the model using spandrel
+# - it converts the various versions of ESRGAN checkpoints to a common format
+model = ModelLoader().load_from_file(in_filepath)
+
+if model.model.shuffle_factor is not None:
+    print("RealESRGAN models with pixel shuffle are not supported yet.")
+    exit(1)
+if model.model.plus:
+    print("RealESRGAN+ (plus) models are not supported yet.")
+    exit(1)
 
 writer = gguf.GGUFWriter(out_filepath, "esrgan")
 writer.add_name("ESRGAN")
 
-for name, tensor in model.items():
+for name, tensor in model.model.state_dict().items():
     if len(name) >= 64:
         print("Warning: name too long", len(name), name)
 

@@ -57,6 +57,44 @@ Tensor rrdb(ModelRef m, Tensor x) {
 struct ESRGANParams {
     int scale = 4;
     int n_blocks = 23;
+
+    static ESRGANParams detect(ModelRef m) {
+        ESRGANParams p;
+        p.n_blocks = 0;
+        int model_len = 0;
+        TensorName name;
+
+        ggml_context* ctx = m.weights_context;
+        for (Tensor t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
+            auto name = std::string_view(ggml_get_name(t));
+            if (name.starts_with("model.")) {
+                name = name.substr(6);
+                int x = 0;
+                auto r = std::from_chars(name.data(), name.data() + 2, x);
+                model_len = std::max(model_len, x + 1);
+
+                size_t i_dot = name.find('.');
+                if (i_dot == std::string_view::npos) {
+                    continue;
+                }
+                name = name.substr(i_dot + 1, 11);
+                if (name.starts_with("sub.") &&
+                    (name.ends_with("RDB1") || name.ends_with("RDB1."))) {
+                    r = std::from_chars(name.data() + 4, name.data() + 6, x);
+                    p.n_blocks = std::max(p.n_blocks, x + 1);
+                }
+            }
+        }
+        // 3 layers per upscale block, each upscales x2, 5 blocks for the rest of the model
+        p.scale = 1 << ((model_len - 5) / 3);
+        if (p.scale < 2 || p.scale > 4) {
+            throw std::runtime_error(fmt::format("Unsupported scale: {}", p.scale));
+        }
+        if (p.n_blocks < 1 || p.n_blocks > 23) {
+            throw std::runtime_error(fmt::format("Invalid number of blocks: {}", p.n_blocks));
+        }
+        return p;
+    }
 };
 
 Tensor upscale(ModelRef m, Tensor x, ESRGANParams const& p) {
@@ -79,7 +117,7 @@ Tensor upscale(ModelRef m, Tensor x, ESRGANParams const& p) {
     x = conv_2d(m[seq], x, 1, 1);
     x = ggml_leaky_relu(m, x, 0.2f, true);
     x = conv_2d(m[seq + 2], x, 1, 1);
-    
+
     return mark_output(m, x, "result");
 }
 
