@@ -1,3 +1,12 @@
+# Please check out **_vision_.cpp**
+
+This project has been superseded by [vision.cpp](https://github.com/Acly/vision.cpp).
+
+It supports the same models (and more), is smaller and easier to deploy,
+and runs on more GPUs and systems out of the box. Inference is faster too!
+
+_dlimgedit_ is no longer maintained.
+
 # \<dlimgedit\>
 
 *dlimgedit* is a C++ library for image painting and editing workflows which make use of deep learning.
